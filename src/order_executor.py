@@ -21,6 +21,12 @@ from src.file_manager import (
     mark_session_processed,
     save_order_result,
 )
+from src.order_validator import (
+    validate_analysis,
+    validate_order_prices,
+    validate_slippage,
+    validate_balance,
+)
 from src.logger import setup_logger
 
 logger = setup_logger("order_executor")
@@ -58,23 +64,7 @@ class OrderExecutor:
             logger.error(f"No analyses found for session {session_id}")
             return []
 
-        # 스킵/분석실패 종목 제외
-        tradeable = [
-            a for a in analyses
-            if a.get("decision") in ("long", "short")
-            and not a.get("analysis_skipped", False)
-        ]
-
-        logger.info(
-            f"Session {session_id}: {len(analyses)} total, "
-            f"{len(tradeable)} tradeable, "
-            f"{len(analyses) - len(tradeable)} skip/failed"
-        )
-
-        if not tradeable:
-            logger.info("No tradeable positions. Marking session complete.")
-            mark_session_processed(session_id)
-            return []
+        logger.info(f"Session {session_id}: {len(analyses)} analyses loaded")
 
         # 3. 잔고 확인
         balance = self._get_balance()
@@ -84,24 +74,27 @@ class OrderExecutor:
 
         logger.info(f"Available balance: ${balance:,.2f} USDT")
 
-        # 4. 기존 포지션 조회
+        # 4. 기존 포지션 조회 (전체)
         existing_positions = self._get_existing_positions()
+        logger.info(f"Existing positions: {len(existing_positions)}")
 
-        # 5. 각 종목 주문 실행
+        # 5. 분석 결과를 symbol → analysis 맵으로
+        analysis_by_symbol = {a["symbol"]: a for a in analyses}
+
+        # 6. 처리할 모든 종목 = 분석된 종목 ∪ 기존 포지션 보유 종목
+        # (보유 중인데 이번 분석에 없는 종목도 처리해야 함)
+        all_symbols = set(analysis_by_symbol.keys()) | set(existing_positions.keys())
+
         order_results = []
-        for analysis in tradeable:
-            symbol = analysis["symbol"]
-            decision = analysis["decision"]
-            position_pct = analysis.get("suggested_position_pct", 0)
-
-            if position_pct <= 0:
-                logger.info(f"[{symbol}] Position size is 0%, skipping")
-                continue
+        for symbol in sorted(all_symbols):
+            analysis = analysis_by_symbol.get(symbol)
+            existing = existing_positions.get(symbol)
 
             result = self._process_single_coin(
+                symbol=symbol,
                 analysis=analysis,
+                existing=existing,
                 balance=balance,
-                existing_positions=existing_positions,
                 dry_run=dry_run,
             )
             if result:
@@ -116,36 +109,97 @@ class OrderExecutor:
 
     def _process_single_coin(
         self,
-        analysis: dict,
+        symbol: str,
+        analysis: Optional[dict],
+        existing: Optional[dict],
         balance: float,
-        existing_positions: dict,
         dry_run: bool,
     ) -> Optional[dict]:
-        """단일 종목의 주문을 처리합니다."""
-        symbol = analysis["symbol"]
-        decision = analysis["decision"]
-        position_pct = analysis.get("suggested_position_pct", 0)
-        stop_loss_pct = analysis.get("stop_loss_pct", 3.0)
-        take_profit_pct = analysis.get("take_profit_pct", 6.0)
+        """
+        단일 종목을 처리합니다. 모든 경우의 수를 다룹니다:
 
-        logger.info(f"[{symbol}] Processing: {decision}, {position_pct:.2f}% of balance")
+        | 기존 상태       | 새 분석     | 동작                                  |
+        |---------------|-----------|--------------------------------------|
+        | 없음           | long/short | 미체결 정리 → 검증 → 신규 진입            |
+        | 없음           | skip       | 미체결 정리만                            |
+        | 없음           | (분석없음)  | 미체결 정리만                            |
+        | 같은 방향 포지션 | 같은 방향   | 유지 (불필요한 거래 방지)                  |
+        | 반대 방향 포지션 | 반대 방향   | 미체결 정리 → 청산 → 검증 → 신규 진입       |
+        | 보유 포지션     | skip       | 미체결 정리 → 청산 (LLM이 더이상 추천 안함)  |
+        | 보유 포지션     | (분석없음)  | 유지 (효율성 필터로 분석 안된 종목)          |
+        """
+        # 0. 기존 포지션 분석
+        existing_size = int(existing.get("size", 0)) if existing else 0
+        existing_side = "long" if existing_size > 0 else "short" if existing_size < 0 else None
 
-        # 기존 포지션 확인
-        existing = existing_positions.get(symbol)
-        if existing:
-            existing_size = int(existing.get("size", 0))
-            existing_side = "long" if existing_size > 0 else "short" if existing_size < 0 else None
+        # 0a. 분석 없음 + 포지션 없음 → 미체결 잔여 주문만 정리
+        if not analysis and not existing_side:
+            self._cleanup_pending_orders(symbol, dry_run)
+            return None
 
-            # 같은 방향이면 스킵 (이미 포지션 있음)
-            if existing_side == decision:
-                logger.info(f"[{symbol}] Already in {decision} position (size={existing_size}), skipping")
+        # 0b. 분석 없음 + 포지션 있음 → 효율성 필터로 분석 스킵된 경우 = 유지
+        if not analysis and existing_side:
+            logger.info(f"[{symbol}] Holding {existing_side} position (no new analysis)")
+            return None
+
+        decision = analysis.get("decision", "skip")
+        analysis_skipped = analysis.get("analysis_skipped", False)
+
+        # 1. 분석이 skip이거나 효율성으로 스킵됨
+        if decision == "skip" or analysis_skipped:
+            if existing_side:
+                # 보유 중인데 더이상 추천 안함 → 청산
+                logger.info(f"[{symbol}] Closing {existing_side} position (analysis: skip)")
+                if not dry_run:
+                    self._cleanup_pending_orders(symbol, dry_run=False)
+                    self._close_position(symbol, existing_size)
+                return {
+                    "session_id": get_session_id(),
+                    "symbol": symbol,
+                    "decision": "close",
+                    "side": "sell" if existing_size > 0 else "buy",
+                    "size": -existing_size,
+                    "status": "closed_on_skip" if not dry_run else "dry_run_close",
+                    "error": "",
+                }
+            else:
+                # 보유도 없고 skip이면 미체결만 정리
+                self._cleanup_pending_orders(symbol, dry_run)
                 return None
 
-            # 반대 방향이면 기존 포지션 정리
-            if existing_side and existing_side != decision:
-                logger.info(f"[{symbol}] Closing existing {existing_side} position before entering {decision}")
-                if not dry_run:
-                    self._close_position(symbol, existing_size)
+        # 2. 분석 무결성 검증 (LLM 실수 방어)
+        valid, reason = validate_analysis(analysis)
+        if not valid:
+            logger.error(f"[{symbol}] VALIDATION FAILED: {reason} - skipping order")
+            return {
+                "session_id": get_session_id(), "symbol": symbol,
+                "decision": decision, "status": "validation_failed",
+                "error": reason, "size": 0,
+            }
+
+        position_pct = analysis.get("suggested_position_pct", 0)
+        if position_pct <= 0:
+            logger.info(f"[{symbol}] Position size is 0%, skipping")
+            return None
+
+        # 3. 같은 방향 포지션 보유 → 유지 (효율적)
+        if existing_side == decision:
+            logger.info(f"[{symbol}] Already in {decision} position (size={existing_size}), holding")
+            return None
+
+        # 4. 반대 방향 포지션 → 미체결 정리 + 청산
+        if existing_side and existing_side != decision:
+            logger.info(f"[{symbol}] Reversing: closing {existing_side} → entering {decision}")
+            if not dry_run:
+                self._cleanup_pending_orders(symbol, dry_run=False)
+                self._close_position(symbol, existing_size)
+        else:
+            # 5. 신규 진입 전에도 좀비 미체결 주문 정리
+            self._cleanup_pending_orders(symbol, dry_run)
+
+        stop_loss_pct = analysis.get("stop_loss_pct", 3.0)
+        take_profit_pct = analysis.get("take_profit_pct", 6.0)
+        logger.info(f"[{symbol}] Entering: {decision}, {position_pct:.2f}% of balance")
 
         # 계약 정보 조회
         contract_info = self._get_contract_info(symbol)
@@ -153,22 +207,35 @@ class OrderExecutor:
             logger.error(f"[{symbol}] Could not get contract info")
             return None
 
-        # 주문 수량 계산
-        position_usdt = balance * (position_pct / 100.0)
-        current_price = analysis.get("premium_discount", {}).get("current_price", 0)
+        # 분석 시점 가격과 현재 시장 가격 모두 조회
+        analysis_price = analysis.get("premium_discount", {}).get("current_price", 0) \
+                       or analysis.get("entry_price_at_analysis", 0)
+        current_price = 0.0
+        try:
+            tickers = self.client.get_futures_tickers(contract=symbol)
+            if tickers:
+                current_price = float(tickers[0].get("last", 0))
+        except Exception as e:
+            logger.warning(f"[{symbol}] Could not fetch live price: {e}")
+
         if current_price <= 0:
-            # 티커에서 현재 가격 조회
-            try:
-                tickers = self.client.get_futures_tickers(contract=symbol)
-                if tickers:
-                    current_price = float(tickers[0].get("last", 0))
-            except Exception:
-                pass
+            current_price = analysis_price
 
         if current_price <= 0:
             logger.error(f"[{symbol}] Could not determine current price")
             return None
 
+        # 슬리피지 검증: 분석 시점 가격과 현재 가격 차이가 너무 크면 거부
+        ok, reason = validate_slippage(analysis_price, current_price)
+        if not ok:
+            logger.error(f"[{symbol}] SLIPPAGE REJECTED: {reason}")
+            return {
+                "session_id": get_session_id(), "symbol": symbol,
+                "decision": decision, "status": "slippage_rejected",
+                "error": reason, "size": 0,
+            }
+
+        position_usdt = balance * (position_pct / 100.0)
         leverage = self.trading_cfg["leverage"]
         quanto_multiplier = float(contract_info.get("quanto_multiplier", 1))
 
@@ -194,6 +261,27 @@ class OrderExecutor:
         else:
             stop_loss_price = current_price * (1 + stop_loss_pct / 100)
             take_profit_price = current_price * (1 - take_profit_pct / 100)
+
+        # SL/TP 가격 방향성 검증 (LLM이 SL/TP를 뒤바꾸는 실수 차단)
+        ok, reason = validate_order_prices(decision, current_price, stop_loss_price, take_profit_price)
+        if not ok:
+            logger.error(f"[{symbol}] PRICE VALIDATION FAILED: {reason}")
+            return {
+                "session_id": get_session_id(), "symbol": symbol,
+                "decision": decision, "status": "price_validation_failed",
+                "error": reason, "size": 0,
+            }
+
+        # 잔고 충분성 검증 (마진 = 포지션USDT, 레버리지 적용 전)
+        required_margin = position_usdt
+        ok, reason = validate_balance(required_margin, balance)
+        if not ok:
+            logger.error(f"[{symbol}] INSUFFICIENT BALANCE: {reason}")
+            return {
+                "session_id": get_session_id(), "symbol": symbol,
+                "decision": decision, "status": "insufficient_balance",
+                "error": reason, "size": 0,
+            }
 
         order_info = {
             "session_id": get_session_id(),
@@ -289,6 +377,29 @@ class OrderExecutor:
         except Exception as e:
             logger.error(f"[{symbol}] Contract info error: {e}")
             return None
+
+    def _cleanup_pending_orders(self, symbol: str, dry_run: bool = False):
+        """
+        해당 종목의 좀비 미체결 주문(일반 + 트리거 SL/TP)을 모두 취소합니다.
+        세션마다 호출되어 잔여 주문이 누적되는 것을 방지합니다.
+        """
+        if dry_run:
+            return
+        try:
+            # 일반 미체결 주문 취소
+            self.client.cancel_all_futures_orders(symbol)
+        except Exception as e:
+            logger.debug(f"[{symbol}] No pending orders or cancel failed: {e}")
+
+        # 트리거(조건부) 주문도 취소
+        try:
+            self.client._request(
+                "DELETE",
+                f"/futures/{self.client.settle}/price_orders",
+                params={"contract": symbol},
+            )
+        except Exception as e:
+            logger.debug(f"[{symbol}] No price-triggered orders or cancel failed: {e}")
 
     def _close_position(self, symbol: str, current_size: int):
         """기존 포지션을 닫습니다."""
