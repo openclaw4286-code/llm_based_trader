@@ -62,17 +62,13 @@ pip install -r requirements.txt
 
 ### 3. API 키 설정
 
-`.env.example`을 `.env`로 복사하고 키를 입력:
+대화식 스크립트로 두 키를 한 번에 입력:
 
 ```bash
-cp .env.example .env
-nano .env
+bash scripts/setup_keys.sh
 ```
 
-```
-GATEIO_API_KEY=your_gateio_api_key
-GATEIO_API_SECRET=your_gateio_api_secret
-```
+(또는 수동: `cp .env.example .env && nano .env` 후 직접 편집)
 
 > Gate.io API 키 만들기: Gate.io → 계정 → API 관리 → 새 키 → **선물 거래 권한** 필수, IP 화이트리스트 권장
 
