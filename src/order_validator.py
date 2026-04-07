@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 주문 검증 - LLM 실수와 비정상 상태로부터 자금을 보호합니다.
 

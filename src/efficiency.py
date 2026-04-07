@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 효율성 관리자 - efficiency_level (0~10)에 따라 분석 범위를 조절합니다.
 

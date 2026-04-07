@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 ICT (Inner Circle Trader) 기술적 분석 엔진
 

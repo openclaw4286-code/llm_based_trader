@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 파일 관리자 - JSON 파일 읽기/쓰기, 세션 ID 관리, 멱등성 보장을 담당합니다.
 

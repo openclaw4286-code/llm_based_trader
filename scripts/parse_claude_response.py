@@ -1,3 +1,4 @@
+from __future__ import annotations
 #!/usr/bin/env python3
 """
 Claude Code의 응답 파일을 받아 각 종목별 분석 JSON으로 저장합니다.

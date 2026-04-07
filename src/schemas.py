@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 JSON 스키마 정의 - 모듈 간 통신에 사용되는 데이터 구조를 정의합니다.
 

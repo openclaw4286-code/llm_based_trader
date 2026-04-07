@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 설정 파일 로더 - config.yaml과 .env를 읽어 전역 설정 객체를 제공합니다.
 """

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Claude Code 분석 러너 - Claude API를 호출하여 각 종목을 분석하고 JSON을 생성합니다.
 

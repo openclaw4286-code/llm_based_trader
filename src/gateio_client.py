@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Gate.io API 클라이언트 - 현물/선물 계정 정보, 주문, 시세 조회를 담당합니다.
 

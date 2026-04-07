@@ -1,3 +1,4 @@
+from __future__ import annotations
 #!/usr/bin/env python3
 """
 파이프라인 2단계: ICT 분석 & 차트 생성

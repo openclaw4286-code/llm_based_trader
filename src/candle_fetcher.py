@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 캔들 데이터 다운로더 - Gate.io에서 최대 5년치 일봉 데이터를 가져와 CSV로 저장합니다.
 

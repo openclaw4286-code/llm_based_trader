@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 ICT 차트 시각화 - ICT 분석 결과를 캔들스틱 차트 위에 오버레이하여 PNG로 저장합니다.
 

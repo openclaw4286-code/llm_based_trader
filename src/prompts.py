@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Claude Code 분석용 프롬프트 템플릿
 

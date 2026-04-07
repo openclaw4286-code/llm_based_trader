@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 주문 실행 엔진 - 분석 결과 JSON을 읽고 Gate.io 선물 주문을 실행합니다.
 

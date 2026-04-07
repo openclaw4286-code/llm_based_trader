@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 인기종목 수집 - Gate.io에서 24시간 거래량 기준 상위 N개 USDT 선물 종목을 선별합니다.
 

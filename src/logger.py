@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 로깅 설정 - 콘솔 + 파일 로깅을 제공합니다.
 """

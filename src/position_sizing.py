@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 포지션 사이징 - Kelly Criterion 기반으로 각 종목의 투자 비율과 현금 보유 비율을 계산합니다.
 
