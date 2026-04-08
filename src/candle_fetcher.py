@@ -42,17 +42,21 @@ def fetch_daily_candles(symbol: str, years: int = YEARS_TO_FETCH) -> pd.DataFram
 
     all_candles = []
 
-    # 선물 API로 시도 (한 번에 2000개까지)
+    # 선물 API로 시도
     try:
         all_candles = _fetch_futures_candles(client, symbol, start_ts, now)
         logger.info(f"[{symbol}] Fetched {len(all_candles)} candles from futures API")
     except Exception as e:
-        logger.warning(f"[{symbol}] Futures API failed: {e}, trying spot API")
+        logger.warning(f"[{symbol}] Futures API failed: {e}")
+        all_candles = []
+
+    # 선물이 비었으면 현물 폴백
+    if not all_candles:
         try:
             all_candles = _fetch_spot_candles(client, symbol, start_ts, now)
             logger.info(f"[{symbol}] Fetched {len(all_candles)} candles from spot API")
         except Exception as e2:
-            logger.error(f"[{symbol}] Both APIs failed: {e2}")
+            logger.error(f"[{symbol}] Spot API also failed: {e2}")
             return pd.DataFrame()
 
     if not all_candles:
@@ -72,21 +76,28 @@ def fetch_daily_candles(symbol: str, years: int = YEARS_TO_FETCH) -> pd.DataFram
 
 
 def _fetch_futures_candles(client: GateIOClient, symbol: str, start_ts: int, end_ts: int) -> list:
-    """선물 API에서 일봉 데이터를 페이지네이션으로 가져옵니다."""
+    """선물 API에서 일봉 데이터를 청크 단위로 가져옵니다.
+
+    Gate.io는 from+to를 같이 주면 그 범위가 limit 이내여야 합니다.
+    따라서 1500일씩 끊어서 요청합니다 (limit=2000 여유 있게).
+    """
     all_data = []
+    chunk_days = 1500
     current_start = start_ts
 
     while current_start < end_ts:
+        chunk_end = min(current_start + chunk_days * ONE_DAY_SEC, end_ts)
+
         candles = client.get_futures_candlesticks(
             contract=symbol,
             interval="1d",
-            limit=2000,
             from_ts=current_start,
-            to_ts=end_ts,
+            to_ts=chunk_end,
         )
 
         if not candles:
-            break
+            current_start = chunk_end + ONE_DAY_SEC
+            continue
 
         for c in candles:
             all_data.append([
@@ -98,37 +109,39 @@ def _fetch_futures_candles(client: GateIOClient, symbol: str, start_ts: int, end
                 float(c.get("v", 0)),
             ])
 
-        # 다음 페이지: 마지막 캔들 타임스탬프 + 1일
         last_ts = max(int(c["t"]) for c in candles)
         current_start = last_ts + ONE_DAY_SEC
 
-        if len(candles) < 2000:
-            break
-
-        time.sleep(0.2)  # 레이트 리밋 방지
+        time.sleep(0.2)
 
     return all_data
 
 
 def _fetch_spot_candles(client: GateIOClient, symbol: str, start_ts: int, end_ts: int) -> list:
-    """현물 API에서 일봉 데이터를 페이지네이션으로 가져옵니다."""
+    """현물 API에서 일봉 데이터를 청크 단위로 가져옵니다.
+
+    Gate.io 현물은 한 번에 최대 1000개이므로 800일씩 끊어서 요청합니다.
+    """
     all_data = []
+    chunk_days = 800
     current_start = start_ts
 
     while current_start < end_ts:
+        chunk_end = min(current_start + chunk_days * ONE_DAY_SEC, end_ts)
+
         candles = client.get_spot_candlesticks(
             currency_pair=symbol,
             interval="1d",
-            limit=1000,
             from_ts=current_start,
-            to_ts=end_ts,
+            to_ts=chunk_end,
         )
 
         if not candles:
-            break
+            current_start = chunk_end + ONE_DAY_SEC
+            continue
 
         for c in candles:
-            # 현물 캔들 형식: [timestamp, volume, close, high, low, open, is_closed]
+            # 현물 캔들 형식: [timestamp, volume, close, high, low, open, ...]
             all_data.append([
                 int(c[0]),
                 float(c[5]),   # open
@@ -140,9 +153,6 @@ def _fetch_spot_candles(client: GateIOClient, symbol: str, start_ts: int, end_ts
 
         last_ts = max(int(c[0]) for c in candles)
         current_start = last_ts + ONE_DAY_SEC
-
-        if len(candles) < 1000:
-            break
 
         time.sleep(0.2)
 

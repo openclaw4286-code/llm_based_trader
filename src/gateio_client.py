@@ -99,25 +99,31 @@ class GateIOClient:
         self,
         currency_pair: str,
         interval: str = "1d",
-        limit: int = 1000,
+        limit: Optional[int] = None,
         from_ts: Optional[int] = None,
         to_ts: Optional[int] = None,
     ) -> list[list]:
         """
         현물 캔들스틱 데이터를 조회합니다.
 
+        Gate.io 규칙: from+to를 동시에 주면 limit을 제외해야 합니다.
+
         Returns:
-            [[timestamp, volume, close, high, low, open, is_closed], ...]
+            [[timestamp, volume, close, high, low, open, ...], ...]
         """
         params = {
             "currency_pair": currency_pair,
             "interval": interval,
-            "limit": limit,
         }
-        if from_ts:
+        if from_ts and to_ts:
             params["from"] = from_ts
-        if to_ts:
             params["to"] = to_ts
+        elif from_ts:
+            params["from"] = from_ts
+            if limit:
+                params["limit"] = limit
+        else:
+            params["limit"] = limit or 1000
 
         return self._request("GET", "/spot/candlesticks", params=params, auth=False)
 
@@ -146,12 +152,14 @@ class GateIOClient:
         self,
         contract: str,
         interval: str = "1d",
-        limit: int = 1000,
+        limit: Optional[int] = None,
         from_ts: Optional[int] = None,
         to_ts: Optional[int] = None,
     ) -> list[dict]:
         """
         선물 캔들스틱 데이터를 조회합니다.
+
+        Gate.io 규칙: from+to를 동시에 주면 limit을 제외해야 합니다.
 
         Returns:
             [{"t": timestamp, "v": volume, "c": close, "h": high, "l": low, "o": open}, ...]
@@ -159,12 +167,16 @@ class GateIOClient:
         params = {
             "contract": contract,
             "interval": interval,
-            "limit": limit,
         }
-        if from_ts:
+        if from_ts and to_ts:
             params["from"] = from_ts
-        if to_ts:
             params["to"] = to_ts
+        elif from_ts:
+            params["from"] = from_ts
+            if limit:
+                params["limit"] = limit
+        else:
+            params["limit"] = limit or 1000
 
         return self._request(
             "GET", f"/futures/{self.settle}/candlesticks", params=params, auth=False
