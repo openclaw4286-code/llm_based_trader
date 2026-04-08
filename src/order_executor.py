@@ -27,7 +27,6 @@ from src.order_validator import (
     validate_order_prices,
     validate_slippage,
     validate_balance,
-    validate_max_loss,
 )
 from src.logger import setup_logger
 
@@ -285,17 +284,6 @@ class OrderExecutor:
                 "error": reason, "size": 0,
             }
 
-        # 절대 손실 한도 검증: (노셔널 × SL%) <= 잔고의 1.5%
-        ok, reason = validate_max_loss(position_usdt, stop_loss_pct, leverage, balance)
-        if not ok:
-            logger.error(f"[{symbol}] MAX LOSS EXCEEDED: {reason}")
-            return {
-                "session_id": get_session_id(), "symbol": symbol,
-                "decision": decision, "status": "max_loss_exceeded",
-                "error": reason, "size": 0,
-            }
-        logger.info(f"[{symbol}] {reason}")
-
         order_info = {
             "session_id": get_session_id(),
             "symbol": symbol,
@@ -319,16 +307,16 @@ class OrderExecutor:
             save_order_result(order_info)
             return order_info
 
-        # 실제 주문 실행 (진입 → 체결 확인 → SL 필수 → TP 선택)
+        # 실제 주문 실행
         try:
             # 레버리지 설정
             self.client.update_position_leverage(symbol, leverage)
 
-            # 시장가 진입 주문
+            # 시장가 주문
             order_result = self.client.create_futures_order(
                 contract=symbol,
                 size=size,
-                price=0,
+                price=0,  # 시장가
                 tif="ioc",
             )
 
@@ -337,65 +325,15 @@ class OrderExecutor:
             order_info["entry_price"] = float(order_result.get("fill_price", current_price) or current_price)
 
             logger.info(
-                f"[{symbol}] ENTRY ORDER: {decision} {abs(size)} contracts, "
+                f"[{symbol}] ORDER PLACED: {decision} {abs(size)} contracts, "
                 f"order_id={order_info['order_id']}, status={order_info['status']}"
             )
 
-            # 체결 확인 (최대 3회 재시도, 각 0.5초 대기)
-            import time as _t
-            filled_size = 0
-            for attempt in range(3):
-                _t.sleep(0.5)
-                positions = self._get_existing_positions()
-                pos = positions.get(symbol)
-                if pos and int(pos.get("size", 0)) != 0:
-                    filled_size = int(pos["size"])
-                    break
+            # 손절 주문 (조건부 주문)
+            self._place_stop_loss(symbol, size, stop_loss_price)
 
-            if filled_size == 0:
-                order_info["status"] = "not_filled"
-                order_info["error"] = "Entry order did not fill within 1.5s"
-                logger.error(f"[{symbol}] ENTRY NOT FILLED - no position detected")
-                save_order_result(order_info)
-                return order_info
-
-            logger.info(f"[{symbol}] POSITION CONFIRMED: size={filled_size}")
-
-            # SL 주문 필수 (3회 재시도)
-            sl_placed = False
-            for attempt in range(3):
-                try:
-                    self._place_stop_loss(symbol, filled_size, stop_loss_price)
-                    sl_placed = True
-                    break
-                except Exception as sl_err:
-                    logger.warning(f"[{symbol}] SL attempt {attempt+1}/3 failed: {sl_err}")
-                    _t.sleep(0.5)
-
-            if not sl_placed:
-                # SL 설정 실패 = 무한손실 위험 → 즉시 포지션 청산
-                logger.error(f"[{symbol}] SL PLACEMENT FAILED - EMERGENCY CLOSING POSITION")
-                try:
-                    self._close_position(symbol, filled_size)
-                    order_info["status"] = "sl_failed_closed"
-                    order_info["error"] = "SL placement failed 3x, position emergency closed"
-                except Exception as close_err:
-                    order_info["status"] = "sl_failed_close_failed"
-                    order_info["error"] = f"SL failed AND close failed: {close_err}"
-                    logger.critical(f"[{symbol}] CRITICAL: Position open without SL, manual intervention required!")
-                save_order_result(order_info)
-                return order_info
-
-            logger.info(f"[{symbol}] SL protection active at ${stop_loss_price:,.4f}")
-
-            # TP 주문 (선택 — 실패해도 포지션 유지)
-            try:
-                self._place_take_profit(symbol, filled_size, take_profit_price)
-                logger.info(f"[{symbol}] TP set at ${take_profit_price:,.4f}")
-            except Exception as tp_err:
-                logger.warning(f"[{symbol}] TP failed (non-critical, position still SL-protected): {tp_err}")
-
-            order_info["status"] = "filled"
+            # 익절 주문 (조건부 주문)
+            self._place_take_profit(symbol, size, take_profit_price)
 
         except Exception as e:
             order_info["status"] = "failed"
@@ -481,52 +419,61 @@ class OrderExecutor:
             logger.error(f"[{symbol}] Close position error: {e}")
 
     def _place_stop_loss(self, symbol: str, entry_size: int, stop_price: float):
-        """손절 주문을 설정합니다. 실패 시 예외를 던져서 호출부가 재시도/청산할 수 있게 합니다."""
-        close_size = -entry_size
-        trigger_body = {
-            "initial": {
-                "contract": symbol,
-                "size": close_size,
-                "price": "0",
-                "tif": "ioc",
-                "reduce_only": True,
-            },
-            "trigger": {
-                "strategy_type": 0,
-                "price_type": 0,
-                "price": str(stop_price),
-                "rule": 2 if entry_size > 0 else 1,  # 롱: <= stop, 숏: >= stop
-            },
-        }
-        self.client._request(
-            "POST",
-            f"/futures/{self.client.settle}/price_orders",
-            body=trigger_body,
-        )
+        """손절 주문을 설정합니다."""
+        try:
+            # Gate.io price triggered order를 사용
+            close_size = -entry_size
+            trigger_body = {
+                "initial": {
+                    "contract": symbol,
+                    "size": close_size,
+                    "price": "0",  # 시장가로 실행
+                    "tif": "ioc",
+                    "reduce_only": True,
+                },
+                "trigger": {
+                    "strategy_type": 0,  # by price
+                    "price_type": 0,  # latest deal price
+                    "price": str(stop_price),
+                    "rule": 2 if entry_size > 0 else 1,  # 1: >=, 2: <=
+                },
+            }
+            self.client._request(
+                "POST",
+                f"/futures/{self.client.settle}/price_orders",
+                body=trigger_body,
+            )
+            logger.info(f"[{symbol}] Stop loss set at ${stop_price:,.4f}")
+        except Exception as e:
+            logger.warning(f"[{symbol}] Stop loss order failed: {e}")
 
     def _place_take_profit(self, symbol: str, entry_size: int, tp_price: float):
-        """익절 주문을 설정합니다. 실패 시 예외를 던집니다 (호출부가 경고 처리)."""
-        close_size = -entry_size
-        trigger_body = {
-            "initial": {
-                "contract": symbol,
-                "size": close_size,
-                "price": "0",
-                "tif": "ioc",
-                "reduce_only": True,
-            },
-            "trigger": {
-                "strategy_type": 0,
-                "price_type": 0,
-                "price": str(tp_price),
-                "rule": 1 if entry_size > 0 else 2,  # 롱: >= tp, 숏: <= tp
-            },
-        }
-        self.client._request(
-            "POST",
-            f"/futures/{self.client.settle}/price_orders",
-            body=trigger_body,
-        )
+        """익절 주문을 설정합니다."""
+        try:
+            close_size = -entry_size
+            trigger_body = {
+                "initial": {
+                    "contract": symbol,
+                    "size": close_size,
+                    "price": "0",
+                    "tif": "ioc",
+                    "reduce_only": True,
+                },
+                "trigger": {
+                    "strategy_type": 0,
+                    "price_type": 0,
+                    "price": str(tp_price),
+                    "rule": 1 if entry_size > 0 else 2,  # 롱: >= tp, 숏: <= tp
+                },
+            }
+            self.client._request(
+                "POST",
+                f"/futures/{self.client.settle}/price_orders",
+                body=trigger_body,
+            )
+            logger.info(f"[{symbol}] Take profit set at ${tp_price:,.4f}")
+        except Exception as e:
+            logger.warning(f"[{symbol}] Take profit order failed: {e}")
 
     def close_all_positions(self):
         """모든 포지션을 닫습니다 (비상용)."""
