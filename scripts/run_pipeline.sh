@@ -84,7 +84,7 @@ if command -v claude &> /dev/null; then
     # Claude Code CLI를 비대화식 모드로 실행
     # --print: 응답을 stdout으로 (대화창 없이)
     # --output-format text: 순수 텍스트만
-    cat "$MASTER_PROMPT" | claude --print --dangerously-skip-permissions --output-format text > "$RESPONSE_FILE" 2>&1 || {
+    cat "$MASTER_PROMPT" | claude --print --dangerously-skip-permissions --model claude-opus-4-6 --output-format text > "$RESPONSE_FILE" 2>&1 || {
         echo "[STEP 4] Claude CLI failed" | tee -a "$PIPELINE_LOG"
         exit 1
     }
