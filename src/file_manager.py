@@ -59,7 +59,11 @@ def load_analysis_json(symbol: str, session_id: Optional[str] = None) -> Optiona
 
 
 def load_all_analysis_for_session(session_id: Optional[str] = None) -> list[dict]:
-    """현재 세션의 모든 분석 결과를 로드합니다."""
+    """현재 세션의 분석 결과(Claude 판단)만 로드합니다.
+
+    ICT JSON(`_ict.json`)과 top_coins.json 등은 제외합니다.
+    분석 결과 파일은 'decision' 필드를 반드시 포함해야 합니다.
+    """
     cfg = get_config()
     analysis_dir = Path(cfg["paths"]["analysis"])
 
@@ -68,8 +72,17 @@ def load_all_analysis_for_session(session_id: Optional[str] = None) -> list[dict
 
     results = []
     for filepath in sorted(analysis_dir.glob(f"{session_id}_*.json")):
-        with open(filepath, "r", encoding="utf-8") as f:
-            results.append(json.load(f))
+        # ICT JSON과 top_coins.json 건너뛰기
+        if filepath.name.endswith("_ict.json") or filepath.name.endswith("_top_coins.json"):
+            continue
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            # 분석 결과인지 검증 (symbol과 decision 필드 필수)
+            if "symbol" in data and "decision" in data:
+                results.append(data)
+        except (json.JSONDecodeError, OSError):
+            continue
 
     return results
 
