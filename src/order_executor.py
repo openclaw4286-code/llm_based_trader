@@ -140,11 +140,8 @@ class OrderExecutor:
             return None
 
         # 0b. 분석 없음 + 포지션 있음 → 효율성 필터로 분석 스킵된 경우 = 유지
-        #     유지 전에 SL 건강 상태 확인 (고아 포지션 방지)
         if not analysis and existing_side:
             logger.info(f"[{symbol}] Holding {existing_side} position (no new analysis)")
-            if not dry_run:
-                self._verify_sl_health(symbol, existing_size, existing)
             return None
 
         decision = analysis.get("decision", "skip")
@@ -188,11 +185,8 @@ class OrderExecutor:
             return None
 
         # 3. 같은 방향 포지션 보유 → 유지 (효율적)
-        #    단, SL이 살아있는지 확인 (없으면 재설치)
         if existing_side == decision:
             logger.info(f"[{symbol}] Already in {decision} position (size={existing_size}), holding")
-            if not dry_run:
-                self._verify_sl_health(symbol, existing_size, existing, analysis)
             return None
 
         # 4. 반대 방향 포지션 → 미체결 정리 + 청산
@@ -446,105 +440,6 @@ class OrderExecutor:
         except Exception as e:
             logger.error(f"[{symbol}] Contract info error: {e}")
             return None
-
-    def _has_active_stop_loss(self, symbol: str, existing_size: int) -> bool:
-        """
-        해당 종목에 포지션 방향을 보호하는 SL 트리거 주문이 살아있는지 확인합니다.
-
-        Gate.io price_orders를 조회하여:
-          - 롱 포지션(size>0): rule=2 (<=) 인 reduce-only 트리거가 있으면 SL로 간주
-          - 숏 포지션(size<0): rule=1 (>=) 인 reduce-only 트리거가 있으면 SL로 간주
-        """
-        try:
-            orders = self.client._request(
-                "GET",
-                f"/futures/{self.client.settle}/price_orders",
-                params={"status": "open", "contract": symbol},
-            )
-        except Exception as e:
-            logger.warning(f"[{symbol}] Could not fetch price orders: {e}")
-            return False
-
-        if not orders:
-            return False
-
-        sl_rule = 2 if existing_size > 0 else 1  # 롱→<=, 숏→>=
-
-        for order in orders:
-            trigger = order.get("trigger", {}) or {}
-            initial = order.get("initial", {}) or {}
-
-            if not initial.get("reduce_only", False):
-                continue
-            if int(trigger.get("rule", 0)) != sl_rule:
-                continue
-
-            # reduce-only + 올바른 방향이면 SL으로 간주 (TP도 같이 잡힐 수 있는데,
-            # TP는 rule이 반대라서 여기서 걸러짐)
-            return True
-
-        return False
-
-    def _verify_sl_health(self, symbol: str, existing_size: int,
-                          existing_pos: dict, analysis: Optional[dict] = None):
-        """
-        기존 포지션에 SL이 활성 상태인지 확인하고, 없으면 재설치합니다.
-
-        재설치 시 SL 가격은:
-          - 새 분석이 있으면 → 분석의 stop_loss_pct 사용
-          - 없으면 → config의 기본값(3%) 사용
-        """
-        if self._has_active_stop_loss(symbol, existing_size):
-            logger.debug(f"[{symbol}] SL health OK")
-            return
-
-        logger.warning(f"[{symbol}] ORPHAN POSITION DETECTED - no active SL, recovering")
-
-        # 현재 가격과 진입가 확인
-        try:
-            entry_price = float(existing_pos.get("entry_price", 0))
-            tickers = self.client.get_futures_tickers(contract=symbol)
-            current_price = float(tickers[0].get("last", 0)) if tickers else entry_price
-        except Exception as e:
-            logger.error(f"[{symbol}] Could not fetch prices for SL recovery: {e}")
-            current_price = float(existing_pos.get("mark_price", 0) or 0)
-
-        if current_price <= 0:
-            logger.critical(f"[{symbol}] Cannot recover SL - no price available, MANUAL INTERVENTION NEEDED")
-            return
-
-        # SL % 결정
-        sl_pct = 3.0
-        if analysis and analysis.get("stop_loss_pct", 0) > 0:
-            sl_pct = float(analysis["stop_loss_pct"])
-
-        # 롱이면 아래로, 숏이면 위로
-        if existing_size > 0:
-            sl_price = current_price * (1 - sl_pct / 100)
-        else:
-            sl_price = current_price * (1 + sl_pct / 100)
-
-        # 재설치 시도 (3회)
-        recovered = False
-        for attempt in range(3):
-            try:
-                self._place_stop_loss(symbol, existing_size, sl_price)
-                recovered = True
-                logger.info(f"[{symbol}] SL RECOVERED at ${sl_price:,.4f} ({sl_pct}%)")
-                break
-            except Exception as e:
-                logger.warning(f"[{symbol}] SL recovery attempt {attempt+1}/3 failed: {e}")
-                import time as _t
-                _t.sleep(0.5)
-
-        if not recovered:
-            # 재설치 실패 = 무방비 포지션 → 긴급 청산
-            logger.critical(f"[{symbol}] SL RECOVERY FAILED - EMERGENCY CLOSING ORPHAN POSITION")
-            try:
-                self._close_position(symbol, existing_size)
-                logger.warning(f"[{symbol}] Orphan position closed")
-            except Exception as e:
-                logger.critical(f"[{symbol}] CANNOT CLOSE ORPHAN: {e} - MANUAL INTERVENTION REQUIRED")
 
     def _cleanup_pending_orders(self, symbol: str, dry_run: bool = False):
         """
