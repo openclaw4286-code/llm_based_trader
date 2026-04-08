@@ -40,19 +40,13 @@ class OrderExecutor:
         self.cfg = get_config()
         self.trading_cfg = self.cfg["trading"]
 
-    def execute_session(
-        self,
-        session_id: Optional[str] = None,
-        dry_run: bool = False,
-        force: bool = False,
-    ) -> list[dict]:
+    def execute_session(self, session_id: Optional[str] = None, dry_run: bool = False) -> list[dict]:
         """
         세션의 분석 결과를 기반으로 주문을 실행합니다.
 
         Args:
             session_id: 세션 ID (None이면 현재 세션)
             dry_run: True면 실제 주문 없이 시뮬레이션
-            force: True면 이미 처리된 세션도 재실행
 
         Returns:
             실행된 주문 결과 리스트
@@ -60,13 +54,11 @@ class OrderExecutor:
         if session_id is None:
             session_id = get_session_id()
 
-        # 1. 중복 실행 체크 (force면 무시)
+        # 1. 중복 실행 체크
         processed = get_processed_sessions()
-        if session_id in processed and not force:
-            logger.warning(f"Session {session_id} already processed. Skipping. (use --force to override)")
+        if session_id in processed:
+            logger.warning(f"Session {session_id} already processed. Skipping.")
             return []
-        if force and session_id in processed:
-            logger.warning(f"Session {session_id} FORCE mode - ignoring processed flag")
 
         # 2. 분석 결과 로드
         analyses = load_all_analysis_for_session(session_id)
@@ -110,24 +102,11 @@ class OrderExecutor:
             if result:
                 order_results.append(result)
 
-        # 6. 세션 처리 완료 기록 — 단, 실제로 상태를 변경한 경우에만 마킹
-        #    (신규 주문, 청산, SL 복구 등 - 순수 hold/no-op은 마킹하지 않음)
-        state_changing_statuses = {
-            "filled", "closed_on_skip", "dry_run", "dry_run_close",
-            "sl_failed_closed", "sl_failed_close_failed",
-        }
-        state_changed = any(
-            r.get("status") in state_changing_statuses
-            for r in order_results
-        )
-
-        if not dry_run and state_changed:
+        # 6. 세션 처리 완료 기록
+        if not dry_run:
             mark_session_processed(session_id)
-            logger.info(f"Session {session_id} marked as processed")
-        elif not dry_run and not state_changed:
-            logger.info(f"Session {session_id} had no state changes - not marking (rerunnable)")
 
-        logger.info(f"Execution complete: {len(order_results)} results")
+        logger.info(f"Execution complete: {len(order_results)} orders placed")
         return order_results
 
     def _process_single_coin(
