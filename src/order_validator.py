@@ -18,11 +18,13 @@ from src.logger import setup_logger
 logger = setup_logger("validator")
 
 # 안전 한계
-MIN_SL_DISTANCE_PCT = 0.5    # SL이 진입가에서 0.5% 미만이면 거부 (노이즈 청산)
-MIN_TP_DISTANCE_PCT = 0.5    # TP도 동일
-MAX_SL_DISTANCE_PCT = 30.0   # SL이 30% 넘으면 거부 (실수)
-MAX_TP_DISTANCE_PCT = 100.0  # TP가 100% 넘으면 거부 (비현실적)
-MAX_SLIPPAGE_PCT = 3.0       # 분석가 ↔ 현재가 차이 3% 초과면 거부
+MIN_SL_DISTANCE_PCT = 0.5      # SL이 진입가에서 0.5% 미만이면 거부 (노이즈 청산)
+MIN_TP_DISTANCE_PCT = 0.5
+MAX_SL_DISTANCE_LONG_PCT = 20.0   # 롱 SL 최대 20%
+MAX_SL_DISTANCE_SHORT_PCT = 15.0  # 숏 SL 최대 15% (상방 무한손실 방지를 위해 타이트하게)
+MAX_TP_DISTANCE_PCT = 100.0
+MAX_SLIPPAGE_PCT = 3.0         # 분석↔실행 가격차
+MAX_LOSS_PER_TRADE_PCT = 1.5   # 한 트레이드당 최대 손실 = 전체 잔고의 1.5%
 
 
 def validate_analysis(analysis: dict) -> tuple[bool, str]:
@@ -68,12 +70,15 @@ def validate_analysis(analysis: dict) -> tuple[bool, str]:
     if position_pct > max_pos + 0.01:
         return False, f"position_pct {position_pct}% exceeds max {max_pos}%"
 
-    # 5. SL/TP 거리 검증
+    # 5. SL/TP 거리 검증 (방향별로 다른 한도)
     if decision in ("long", "short"):
         if sl_pct < MIN_SL_DISTANCE_PCT:
             return False, f"stop_loss_pct {sl_pct}% too small (min {MIN_SL_DISTANCE_PCT}%)"
-        if sl_pct > MAX_SL_DISTANCE_PCT:
-            return False, f"stop_loss_pct {sl_pct}% too large (max {MAX_SL_DISTANCE_PCT}%)"
+
+        max_sl = MAX_SL_DISTANCE_LONG_PCT if decision == "long" else MAX_SL_DISTANCE_SHORT_PCT
+        if sl_pct > max_sl:
+            return False, f"stop_loss_pct {sl_pct}% too large for {decision} (max {max_sl}%)"
+
         if tp_pct < MIN_TP_DISTANCE_PCT:
             return False, f"take_profit_pct {tp_pct}% too small (min {MIN_TP_DISTANCE_PCT}%)"
         if tp_pct > MAX_TP_DISTANCE_PCT:
@@ -84,6 +89,29 @@ def validate_analysis(analysis: dict) -> tuple[bool, str]:
             return False, f"unfavorable R:R - TP({tp_pct}%) < SL({sl_pct}%) * 0.8"
 
     return True, "valid"
+
+
+def validate_max_loss(position_usdt: float, stop_loss_pct: float,
+                      leverage: int, balance: float) -> tuple[bool, str]:
+    """
+    한 트레이드의 최대 손실이 전체 잔고의 MAX_LOSS_PER_TRADE_PCT 이하인지 검증합니다.
+
+    최대 손실 = 노셔널 × SL%  (노셔널 = position_usdt × leverage)
+    """
+    if balance <= 0:
+        return False, f"invalid balance: {balance}"
+
+    notional = position_usdt * leverage
+    max_loss = notional * (stop_loss_pct / 100.0)
+    max_loss_pct_of_balance = (max_loss / balance) * 100.0
+
+    if max_loss_pct_of_balance > MAX_LOSS_PER_TRADE_PCT:
+        return False, (
+            f"max loss ${max_loss:.2f} ({max_loss_pct_of_balance:.2f}% of balance) "
+            f"exceeds {MAX_LOSS_PER_TRADE_PCT}% per-trade cap"
+        )
+
+    return True, f"max loss ${max_loss:.2f} ({max_loss_pct_of_balance:.2f}%) OK"
 
 
 def validate_order_prices(
