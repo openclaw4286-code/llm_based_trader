@@ -94,10 +94,10 @@ def show_status():
     print()
 
 
-def execute_orders(dry_run: bool = False):
+def execute_orders(dry_run: bool = False, force: bool = False):
     """분석 결과 기반으로 주문을 실행합니다."""
     session_id = get_session_id()
-    logger.info(f"=== Step 4: Order Execution (session: {session_id}, dry_run={dry_run}) ===")
+    logger.info(f"=== Step 4: Order Execution (session: {session_id}, dry_run={dry_run}, force={force}) ===")
 
     # 실행 전 상태 요약
     analyses = load_all_analysis_for_session(session_id)
@@ -117,7 +117,7 @@ def execute_orders(dry_run: bool = False):
 
     # 주문 실행
     executor = OrderExecutor()
-    results = executor.execute_session(session_id=session_id, dry_run=dry_run)
+    results = executor.execute_session(session_id=session_id, dry_run=dry_run, force=force)
 
     # 결과 요약
     if results:
@@ -150,6 +150,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Simulate without placing real orders")
     parser.add_argument("--close-all", action="store_true", help="Emergency: close all positions")
     parser.add_argument("--status", action="store_true", help="Show current account status")
+    parser.add_argument("--force", action="store_true", help="Re-execute even if session is marked processed")
     parser.add_argument("--session", type=str, default=None, help="Override session ID")
     args = parser.parse_args()
 
@@ -158,7 +159,7 @@ def main():
     elif args.close_all:
         close_all()
     else:
-        execute_orders(dry_run=args.dry_run)
+        execute_orders(dry_run=args.dry_run, force=args.force)
 
 
 if __name__ == "__main__":
