@@ -10,6 +10,7 @@ from __future__ import annotations
 """
 import json
 import math
+from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from typing import Optional
 from pathlib import Path
 
@@ -31,6 +32,35 @@ from src.order_validator import (
 from src.logger import setup_logger
 
 logger = setup_logger("order_executor")
+
+
+def _round_to_tick(price: float, tick_str: str, rounding=ROUND_DOWN) -> Decimal:
+    """
+    가격을 Gate.io 계약의 tick size(order_price_round) 배수로 반올림합니다.
+
+    Gate.io price_orders API는 trigger.price가 정확히 tick 단위의 배수여야 합니다.
+    플로트 연산 오차를 피하기 위해 Decimal을 사용합니다.
+
+    Args:
+        price: 원본 가격 (float)
+        tick_str: Gate.io 계약의 order_price_round 값 (문자열, 예: "0.1", "0.00001")
+        rounding: ROUND_DOWN(보수적 롱 SL) 또는 ROUND_UP(보수적 숏 SL)
+
+    Returns:
+        tick-aligned Decimal 가격. 이걸 str()로 감싸면 Gate.io가 받아들이는 포맷.
+    """
+    if not tick_str or tick_str == "0":
+        return Decimal(str(price))
+    try:
+        tick = Decimal(tick_str)
+        if tick <= 0:
+            return Decimal(str(price))
+        price_dec = Decimal(str(price))
+        # (price / tick)을 정수로 반올림 후 tick 곱함
+        multiple = (price_dec / tick).quantize(Decimal("1"), rounding=rounding)
+        return multiple * tick
+    except Exception:
+        return Decimal(str(price))
 
 
 class OrderExecutor:
@@ -255,16 +285,30 @@ class OrderExecutor:
         if decision == "short":
             size = -size
 
-        # 손절/익절 가격 계산
+        # 손절/익절 가격 계산 (tick size로 반올림 필수, 아니면 Gate.io가 거부)
+        tick_str = str(contract_info.get("order_price_round", "") or "")
         if decision == "long":
-            stop_loss_price = current_price * (1 - stop_loss_pct / 100)
-            take_profit_price = current_price * (1 + take_profit_pct / 100)
+            stop_loss_price_raw = current_price * (1 - stop_loss_pct / 100)
+            take_profit_price_raw = current_price * (1 + take_profit_pct / 100)
+            # 롱 SL은 아래로 반올림(더 안전), 롱 TP는 위로 반올림(수수료 방어)
+            stop_loss_price = _round_to_tick(stop_loss_price_raw, tick_str, ROUND_DOWN)
+            take_profit_price = _round_to_tick(take_profit_price_raw, tick_str, ROUND_UP)
         else:
-            stop_loss_price = current_price * (1 + stop_loss_pct / 100)
-            take_profit_price = current_price * (1 - take_profit_pct / 100)
+            stop_loss_price_raw = current_price * (1 + stop_loss_pct / 100)
+            take_profit_price_raw = current_price * (1 - take_profit_pct / 100)
+            # 숏 SL은 위로 반올림, 숏 TP는 아래로 반올림
+            stop_loss_price = _round_to_tick(stop_loss_price_raw, tick_str, ROUND_UP)
+            take_profit_price = _round_to_tick(take_profit_price_raw, tick_str, ROUND_DOWN)
+
+        logger.info(
+            f"[{symbol}] tick={tick_str}, entry=${current_price}, "
+            f"SL={stop_loss_price}, TP={take_profit_price}"
+        )
 
         # SL/TP 가격 방향성 검증 (LLM이 SL/TP를 뒤바꾸는 실수 차단)
-        ok, reason = validate_order_prices(decision, current_price, stop_loss_price, take_profit_price)
+        ok, reason = validate_order_prices(
+            decision, current_price, float(stop_loss_price), float(take_profit_price)
+        )
         if not ok:
             logger.error(f"[{symbol}] PRICE VALIDATION FAILED: {reason}")
             return {
@@ -292,8 +336,8 @@ class OrderExecutor:
             "size": size,
             "leverage": leverage,
             "entry_price": current_price,
-            "stop_loss_price": round(stop_loss_price, 6),
-            "take_profit_price": round(take_profit_price, 6),
+            "stop_loss_price": str(stop_loss_price),
+            "take_profit_price": str(take_profit_price),
             "position_usdt": round(position_usdt, 2),
             "position_pct": position_pct,
             "order_id": "",
@@ -418,8 +462,8 @@ class OrderExecutor:
         except Exception as e:
             logger.error(f"[{symbol}] Close position error: {e}")
 
-    def _place_stop_loss(self, symbol: str, entry_size: int, stop_price: float):
-        """손절 주문을 설정합니다."""
+    def _place_stop_loss(self, symbol: str, entry_size: int, stop_price):
+        """손절 주문을 설정합니다. stop_price는 float 또는 Decimal."""
         try:
             # Gate.io price triggered order를 사용
             close_size = -entry_size
@@ -443,12 +487,12 @@ class OrderExecutor:
                 f"/futures/{self.client.settle}/price_orders",
                 body=trigger_body,
             )
-            logger.info(f"[{symbol}] Stop loss set at ${stop_price:,.4f}")
+            logger.info(f"[{symbol}] Stop loss set at ${float(stop_price):,.4f}")
         except Exception as e:
             logger.warning(f"[{symbol}] Stop loss order failed: {e}")
 
-    def _place_take_profit(self, symbol: str, entry_size: int, tp_price: float):
-        """익절 주문을 설정합니다."""
+    def _place_take_profit(self, symbol: str, entry_size: int, tp_price):
+        """익절 주문을 설정합니다. tp_price는 float 또는 Decimal."""
         try:
             close_size = -entry_size
             trigger_body = {
@@ -471,7 +515,7 @@ class OrderExecutor:
                 f"/futures/{self.client.settle}/price_orders",
                 body=trigger_body,
             )
-            logger.info(f"[{symbol}] Take profit set at ${tp_price:,.4f}")
+            logger.info(f"[{symbol}] Take profit set at ${float(tp_price):,.4f}")
         except Exception as e:
             logger.warning(f"[{symbol}] Take profit order failed: {e}")
 
