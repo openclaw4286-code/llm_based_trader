@@ -5,7 +5,7 @@ Gate.io 선물 자동매매 에이전트. ICT 차트 기반 기술적 분석 + C
 ## 시스템 개요
 
 ```
-6시간마다 (0, 6, 12, 18시):
+6시간마다 (04, 10, 16, 22시):
   step1   Gate.io 인기 20종목 + 5년치 일봉 다운로드
   step2   ICT 분석 + 차트 PNG 저장
   step3   Claude Code용 프롬프트 생성
@@ -129,7 +129,7 @@ python scripts/step4_execute_orders.py --status
 bash scripts/install_cron.sh
 ```
 
-설치되면 0시, 6시, 12시, 18시(시스템 로컬 시간)에 자동 실행됩니다.
+설치되면 04시, 10시, 16시, 22시(시스템 로컬 시간)에 자동 실행됩니다.
 
 ```bash
 # 제거

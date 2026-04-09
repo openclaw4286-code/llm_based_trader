@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 0시, 6시, 12시, 18시에 run_pipeline.sh를 실행하는 cron 항목을 설치합니다.
+# 04시, 10시, 16시, 22시에 run_pipeline.sh를 실행하는 cron 항목을 설치합니다.
 #
 # 사용법:
 #   bash scripts/install_cron.sh         # 설치
@@ -21,12 +21,12 @@ chmod +x "$PIPELINE"
 # 기존 항목 제거 후 재설치
 EXISTING=$(crontab -l 2>/dev/null | grep -v "$MARKER" || true)
 
-NEW_ENTRY="0 0,6,12,18 * * * cd $PROJECT_ROOT && bash $PIPELINE >> $PROJECT_ROOT/logs/cron.log 2>&1 $MARKER"
+NEW_ENTRY="0 4,10,16,22 * * * cd $PROJECT_ROOT && bash $PIPELINE >> $PROJECT_ROOT/logs/cron.log 2>&1 $MARKER"
 
 (echo "$EXISTING"; echo "$NEW_ENTRY") | crontab -
 
 echo "Cron installed:"
 crontab -l | grep "$MARKER"
 echo ""
-echo "Pipeline will run at 00:00, 06:00, 12:00, 18:00 (system local time)."
+echo "Pipeline will run at 04:00, 10:00, 16:00, 22:00 (system local time)."
 echo "Logs: $PROJECT_ROOT/logs/cron.log"

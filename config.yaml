@@ -58,7 +58,7 @@ paths:
   orders: data/orders/
   logs: logs/
 
-# --- 스케줄 (0시, 6시, 12시, 18시 KST) ---
+# --- 스케줄 (04시, 10시, 16시, 22시 KST) ---
 schedule:
   timezone: Asia/Seoul
-  run_hours: [0, 6, 12, 18]
+  run_hours: [4, 10, 16, 22]

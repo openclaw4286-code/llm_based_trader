@@ -15,13 +15,25 @@ from typing import Optional
 from src.config_loader import get_config
 
 
+SCHEDULE_HOURS = [4, 10, 16, 22]
+
+
 def get_session_id() -> str:
-    """현재 세션 ID를 생성합니다 (YYYYMMDD_HH 형식)."""
+    """현재 세션 ID를 생성합니다 (YYYYMMDD_HH 형식).
+
+    스케줄: 04, 10, 16, 22시. 00~03시는 전날 22시 세션에 속합니다.
+    """
+    from datetime import timedelta
     now = datetime.now()
-    # 가장 가까운 스케줄 시간으로 반올림 (0, 6, 12, 18)
     hour = now.hour
-    schedule_hour = max(h for h in [0, 6, 12, 18] if h <= hour)
-    return now.strftime(f"%Y%m%d_{schedule_hour:02d}")
+
+    candidates = [h for h in SCHEDULE_HOURS if h <= hour]
+    if candidates:
+        schedule_hour = max(candidates)
+        return now.strftime(f"%Y%m%d_{schedule_hour:02d}")
+    # hour < 첫 스케줄 시간 (예: 00~03시) → 전날 마지막 스케줄 시간
+    prev_day = now - timedelta(days=1)
+    return prev_day.strftime(f"%Y%m%d_{SCHEDULE_HOURS[-1]:02d}")
 
 
 def save_analysis_json(symbol: str, data: dict) -> Path:

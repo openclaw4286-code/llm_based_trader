@@ -46,11 +46,16 @@ logger = setup_logger("step3")
 
 def get_prev_session_id() -> str:
     """이전 세션 ID를 계산합니다 (6시간 전)."""
+    from src.file_manager import SCHEDULE_HOURS
     now = datetime.now()
     prev = now - timedelta(hours=6)
     hour = prev.hour
-    schedule_hour = max(h for h in [0, 6, 12, 18] if h <= hour)
-    return prev.strftime(f"%Y%m%d_{schedule_hour:02d}")
+    candidates = [h for h in SCHEDULE_HOURS if h <= hour]
+    if candidates:
+        schedule_hour = max(candidates)
+        return prev.strftime(f"%Y%m%d_{schedule_hour:02d}")
+    prev_day = prev - timedelta(days=1)
+    return prev_day.strftime(f"%Y%m%d_{SCHEDULE_HOURS[-1]:02d}")
 
 
 def run_api_mode(batch: bool = False):

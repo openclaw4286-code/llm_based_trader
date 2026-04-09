@@ -41,11 +41,18 @@ fi
 LOG_DIR="$PROJECT_ROOT/logs"
 mkdir -p "$LOG_DIR"
 
-SESSION_ID=$(date +%Y%m%d_%H | awk -F_ '{
-    h=$2;
-    if (h<6) sh="00"; else if (h<12) sh="06"; else if (h<18) sh="12"; else sh="18";
-    print $1"_"sh
-}')
+SESSION_ID=$(python3 -c "
+from datetime import datetime, timedelta
+SCHEDULE=[4,10,16,22]
+now=datetime.now()
+h=now.hour
+cand=[x for x in SCHEDULE if x<=h]
+if cand:
+    print(now.strftime('%Y%m%d_')+f'{max(cand):02d}')
+else:
+    prev=now-timedelta(days=1)
+    print(prev.strftime('%Y%m%d_')+f'{SCHEDULE[-1]:02d}')
+")
 
 PIPELINE_LOG="$LOG_DIR/pipeline_${SESSION_ID}.log"
 echo "==========================================" | tee -a "$PIPELINE_LOG"
