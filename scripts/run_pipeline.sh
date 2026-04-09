@@ -15,6 +15,10 @@
 # =============================================================
 set -e  # 에러 발생 시 즉시 중단
 
+# cron에서 실행될 때 PATH가 제한적이므로 Homebrew + 사용자 경로 추가
+# (claude CLI가 /opt/homebrew/bin 에 설치되어 있어서 cron에서 못 찾는 문제 해결)
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.npm-global/bin:$PATH"
+
 # 프로젝트 루트 (이 스크립트의 부모 디렉토리)
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
