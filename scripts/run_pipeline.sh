@@ -15,8 +15,10 @@
 # =============================================================
 set -e  # 에러 발생 시 즉시 중단
 
-# cron에서 실행될 때 PATH가 제한적이므로 Homebrew + 사용자 경로 추가
-# (claude CLI가 /opt/homebrew/bin 에 설치되어 있어서 cron에서 못 찾는 문제 해결)
+# cron 환경 보정: PATH, HOME 설정
+# cron은 최소 PATH만 가지므로 Homebrew/npm 경로 추가
+# cron은 HOME을 안 줄 수 있어서 claude가 ~/.claude/ 설정을 못 찾음
+export HOME="${HOME:-/Users/jimin}"
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.npm-global/bin:$PATH"
 
 # 프로젝트 루트 (이 스크립트의 부모 디렉토리)
@@ -91,19 +93,49 @@ fi
 
 # ─── STEP 4: Claude Code CLI 호출 ────────────────────────
 echo "[STEP 4] Calling Claude Code (this may take a few minutes)..." | tee -a "$PIPELINE_LOG"
-if command -v claude &> /dev/null; then
-    # Claude Code CLI를 비대화식 모드로 실행
-    # --print: 응답을 stdout으로 (대화창 없이)
-    # --output-format text: 순수 텍스트만
-    cat "$MASTER_PROMPT" | claude --print --dangerously-skip-permissions --model claude-opus-4-6 --output-format text > "$RESPONSE_FILE" 2>&1 || {
-        echo "[STEP 4] Claude CLI failed" | tee -a "$PIPELINE_LOG"
-        exit 1
-    }
-    echo "Response saved to $RESPONSE_FILE" | tee -a "$PIPELINE_LOG"
-else
-    echo "[ERROR] 'claude' command not found. Install Claude Code CLI." | tee -a "$PIPELINE_LOG"
+
+# claude 명령어 경로 확인
+CLAUDE_PATH=$(command -v claude 2>/dev/null || true)
+if [ -z "$CLAUDE_PATH" ]; then
+    echo "[ERROR] 'claude' command not found in PATH=$PATH" | tee -a "$PIPELINE_LOG"
+    echo "[ERROR] HOME=$HOME" | tee -a "$PIPELINE_LOG"
     exit 1
 fi
+echo "Using claude at: $CLAUDE_PATH" | tee -a "$PIPELINE_LOG"
+
+# Claude CLI 실행 (stderr도 별도 캡처, set +e로 감싸서 에러 시 로깅 가능)
+CLAUDE_ERR="$PROJECT_ROOT/data/analysis/prompts/${SESSION_ID}_claude_error.log"
+set +e
+cat "$MASTER_PROMPT" | "$CLAUDE_PATH" --print --dangerously-skip-permissions --model claude-opus-4-6 --output-format text > "$RESPONSE_FILE" 2>"$CLAUDE_ERR"
+CLAUDE_EXIT=$?
+set -e
+
+if [ $CLAUDE_EXIT -ne 0 ]; then
+    echo "[STEP 4] Claude CLI failed (exit code $CLAUDE_EXIT)" | tee -a "$PIPELINE_LOG"
+    echo "[STEP 4] Error details:" | tee -a "$PIPELINE_LOG"
+    cat "$CLAUDE_ERR" | tee -a "$PIPELINE_LOG"
+    # response 파일에도 에러 내용이 있을 수 있음
+    if [ -s "$RESPONSE_FILE" ]; then
+        echo "[STEP 4] Response file content:" | tee -a "$PIPELINE_LOG"
+        head -20 "$RESPONSE_FILE" | tee -a "$PIPELINE_LOG"
+    fi
+    exit 1
+fi
+
+# 응답 파일이 비어있거나 너무 작으면 실패 처리
+RESPONSE_SIZE=$(wc -c < "$RESPONSE_FILE" | tr -d ' ')
+if [ "$RESPONSE_SIZE" -lt 100 ]; then
+    echo "[STEP 4] Response too small (${RESPONSE_SIZE} bytes), likely auth error" | tee -a "$PIPELINE_LOG"
+    echo "Response content:" | tee -a "$PIPELINE_LOG"
+    cat "$RESPONSE_FILE" | tee -a "$PIPELINE_LOG"
+    if [ -s "$CLAUDE_ERR" ]; then
+        echo "Error log:" | tee -a "$PIPELINE_LOG"
+        cat "$CLAUDE_ERR" | tee -a "$PIPELINE_LOG"
+    fi
+    exit 1
+fi
+
+echo "Response saved to $RESPONSE_FILE (${RESPONSE_SIZE} bytes)" | tee -a "$PIPELINE_LOG"
 
 # ─── STEP 5: 응답 파싱 + 포지션 사이징 ───────────────────
 echo "[STEP 5] Parsing Claude response..." | tee -a "$PIPELINE_LOG"
