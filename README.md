@@ -1,6 +1,6 @@
 # LLM-Based Crypto Trading Agent
 
-Gate.io 선물 자동매매 에이전트. ICT 차트 기반 기술적 분석 + Claude Code(Opus)의 거시적/정량적 분석으로 6시간마다 롱/숏/스킵을 결정합니다.
+Gate.io 선물 자동매매 에이전트. ICT 차트 기반 기술적 분석 + Claude Code(Opus 4.6)의 거시적/정량적 분석으로 6시간마다 롱/숏/스킵을 결정합니다.
 
 ---
 
@@ -14,11 +14,10 @@ Gate.io 선물 자동매매 에이전트. ICT 차트 기반 기술적 분석 + C
 [step2] 각 종목 ICT 분석 (BOS/CHoCH, OB, FVG, Liquidity, Premium/Discount, OTE)
         → 차트 PNG 저장 + ICT 요약 JSON 저장
    ↓
-[step3] 기존 포지션 조회 → 보유 종목은 분석 스킵 (토큰 절약)
-        → 나머지 종목만 Claude 프롬프트 생성
+[step3] 이전 세션의 분석 JSON 정리 → 20종목 전부 Claude 프롬프트 생성
    ↓
 [step4] Claude Code CLI (Opus 4.6) 호출
-        → 각 종목에 대해 기술적/거시적/스캠 점수 + 롱/숏/스킵 결정
+        → 각 종목에 대해 기술적/거시적 점수 + 롱/숏/스킵 결정
    ↓
 [step5] Claude 응답 파싱 → 종목별 분석 JSON 저장
         → Kelly Criterion으로 각 종목 포지션 비율(%) 계산
@@ -43,36 +42,27 @@ Gate.io 선물 자동매매 에이전트. ICT 차트 기반 기술적 분석 + C
 
 ## 점수 체계 (step4 — Claude 분석)
 
-Claude에게 각 종목마다 3가지 점수를 요청:
+**모든 20종목을 매 세션마다 풀 분석합니다** (보유 중인 종목 포함).
+
+Claude에게 각 종목마다 2가지 점수를 요청:
 
 | 점수 | 범위 | 기준 |
 |---|---|---|
 | **기술적 분석** | -25 ~ +25 | ICT 차트: BOS/CHoCH, Order Block, FVG, Liquidity, Premium/Discount, OTE |
-| **거시적/정량적** | -25 ~ +25 | 뉴스 센티먼트, SNS, 화이트페이퍼, 토크노믹스, 온체인 데이터 |
-| **스캠 탐지** | -25 ~ +25 | 팀 신뢰도, 화이트페이퍼 독창성, 펌프앤덤프 패턴, 워시 트레이딩 |
+| **거시적/정량적** | -25 ~ +25 | 뉴스 센티먼트, SNS, 토크노믹스, 온체인 데이터, 시장 전반 |
 
 ### 결정 로직
 
 ```
 total_score = 기술적 + 거시적
 
-if scam_score <= -15:
-    decision = "skip"          # 스캠 의심 → 무조건 스킵
-elif total_score >= +10:
+if total_score >= +10:
     decision = "long"          # 롱 진입
 elif total_score <= -10:
     decision = "short"         # 숏 진입
 else:
     decision = "skip"          # 애매하면 패스
 ```
-
-### 분석 깊이 (efficiency_level에 따라)
-
-| 깊이 | 프롬프트 크기 | 대상 |
-|---|---|---|
-| full | ~500 토큰 | 상위 5위 + efficiency 0~3 |
-| standard | ~200 토큰 | 6~10위 + efficiency 4~6 |
-| quick | ~80 토큰 | 11위 이하 + efficiency 7~10 |
 
 ---
 
@@ -103,35 +93,25 @@ Kelly 공식: f* = (bp - q) / b
 
 ---
 
-## 한 종목의 전체 처리 흐름 (step3 + step6)
+## 한 종목의 전체 처리 흐름
 
-### Phase 1: 분석 여부 결정 (step3)
+### Phase 1: 분석 (step3 + step4)
 
-파이프라인 시작 시 Gate.io에서 현재 보유 포지션을 한 번 조회합니다.
+**모든 종목을 매번 풀 분석합니다.** 보유 중인 종목도 분석합니다.
+→ Claude가 "이제 나가야 해 (skip)" 또는 "방향 전환해야 해 (반전)" 판단 가능.
 
 ```
-이 종목에 기존 포지션이 있는가?
-├── YES → 분석 스킵 (Claude 호출 안 함, 토큰 절약)
-│         JSON 저장: decision = 기존 방향, analysis_skipped = true
-│
-└── NO → 효율성 필터 통과하는가?
-    ├── NO → 분석 스킵 (efficiency 이유)
-    │        JSON 저장: decision = "skip", analysis_skipped = true
-    │
-    └── YES → Claude 프롬프트 생성 → Claude가 분석 → JSON 저장
-              decision = "long" / "short" / "skip"
-              analysis_skipped = false
+step3: 20종목 전부 프롬프트 생성 (예외 없음)
+step4: Claude가 각 종목 분석 → decision = long / short / skip
 ```
 
 ### Phase 2: 주문 실행 (step6)
 
 step6는 **분석된 종목 + 기존 포지션 보유 종목** 모두를 순회합니다.
 
-각 종목에 대해 `_process_single_coin()`이 호출되며, 아래 의사결정 트리를 따릅니다:
-
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ 입력: analysis (분석 결과 JSON 또는 None)                   │
+│ 입력: analysis (Claude 분석 결과 또는 None)                 │
 │       existing (Gate.io 현재 포지션 또는 None)              │
 └─────────────────────────────────────────────────────────┘
                         │
@@ -141,57 +121,50 @@ step6는 **분석된 종목 + 기존 포지션 보유 종목** 모두를 순회�
              NO         YES
               │          │
               ▼          ▼
-        포지션 있는가?  analysis_skipped = true 인가?
-        ┌──┴──┐        ┌────┴────┐
-       NO    YES      YES        NO
-        │     │        │          │
-        ▼     ▼        ▼          ▼
-     [정리]  [유지]  포지션 있는가?  decision 은?
-     미체결   HOLD   ┌──┴──┐      ┌────┬────┐
-     주문만         NO    YES   skip  같은방향  반대방향/신규
-     취소           │     │      │      │        │
-                 [정리] [유지]    ▼      ▼        ▼
-                 미체결  HOLD  포지션?  [유지]   아래 진입
-                 주문만       ┌┴┐    HOLD     프로세스로
-                             NO YES
-                              │  │
-                           [정리] [청산]
-                           미체결  Claude가
-                           주문만  skip 판단
+        포지션 있는가?   decision 은?
+        ┌──┴──┐       ┌────┬────────┐
+       NO    YES    skip  같은방향   반대방향/신규
+        │     │      │      │          │
+        ▼     ▼      ▼      ▼          ▼
+     [정리]  [유지] 포지션?  [유지]    아래 진입
+     미체결   HOLD  ┌┴┐    HOLD     프로세스로
+     주문만        NO YES
+                    │  │
+                 [정리] [청산]
+                 미체결  Claude가
+                 주문만  skip 판단
 ```
 
-### 경우의 수 상세 (9가지)
+### 경우의 수 상세 (7가지)
 
 | # | 분석 | 기존 포지션 | decision | 동작 | 설명 |
 |---|---|---|---|---|---|
 | 1 | 없음 | 없음 | - | **미체결 주문 정리** | 완전 무관한 종목 |
 | 2 | 없음 | LONG 보유 | - | **HOLD** | top20 밖이지만 포지션 있음 → 유지 |
-| 3 | skipped | 없음 | - | **미체결 주문 정리** | 효율성 스킵, 포지션도 없음 |
-| 4 | skipped | LONG 보유 | long | **HOLD** | 분석 안 했으므로 기존 유지 |
-| 5 | 있음 | 없음 | skip | **미체결 주문 정리** | Claude가 skip → 아무것도 안 함 |
-| 6 | 있음 | LONG 보유 | skip | **청산** | Claude가 더 이상 추천 안 함 → 포지션 종료 |
-| 7 | 있음 | LONG 보유 | long | **HOLD** | 같은 방향 → 유지 (불필요한 거래 방지) |
-| 8 | 있음 | LONG 보유 | short | **청산 → 숏 진입** | 반대 방향 → 기존 닫고 새로 잡기 |
-| 9 | 있음 | 없음 | long/short | **신규 진입** | 새 포지션 열기 |
+| 3 | 있음 | 없음 | skip | **미체결 주문 정리** | Claude가 skip → 아무것도 안 함 |
+| 4 | 있음 | LONG 보유 | skip | **청산** | Claude가 더 이상 추천 안 함 → 포지션 종료 |
+| 5 | 있음 | LONG 보유 | long | **HOLD** | 같은 방향 → 유지 (불필요한 거래 방지) |
+| 6 | 있음 | LONG 보유 | short | **청산 → 숏 진입** | 반대 방향 → 기존 닫고 새로 잡기 |
+| 7 | 있음 | 없음 | long/short | **신규 진입** | 새 포지션 열기 |
 
 > 위 표에서 SHORT 보유 케이스도 동일하게 대칭 적용됩니다.
 
 ### 핵심 원칙
 
-1. **`analysis_skipped=true`이면 절대 청산 안 함** — 분석을 안 한 상태에서 판단하지 않음
-2. **`decision="skip"` (Claude가 분석 후 내린 판단)일 때만 기존 포지션 청산** — 의도적 판단
-3. **같은 방향 포지션은 무조건 HOLD** — 매 세션마다 포지션 열고 닫는 비용 방지
-4. **보유 중인 종목은 Claude 분석 자체를 스킵** — 토큰 절약 (분석해봤자 HOLD)
+1. **모든 종목 매번 분석** — 보유 중이어도 분석해서 청산/반전 판단
+2. **`decision="skip"` (Claude 판단)일 때 기존 포지션 청산** — 의도적 퇴장
+3. **같은 방향 포지션은 HOLD** — 매 세션마다 포지션 열고 닫는 비용 방지
+4. **top20 밖이지만 포지션 보유 중 (분석 없음)** → 유지 (SL/TP로 관리)
 
 ---
 
-## 신규 진입 프로세스 (위 표의 #8, #9)
+## 신규 진입 프로세스 (위 표의 #6, #7)
 
 신규 포지션을 열 때 아래 단계를 순서대로 거칩니다. **어느 하나라도 실패하면 주문 안 나감**.
 
 ```
 1. 미체결 좀비 주문 정리 (이전 세션의 잔여 주문)
-2. 반대 포지션 있으면 먼저 청산 (#8의 경우)
+2. 반대 포지션 있으면 먼저 청산 (#6의 경우)
 3. 분석 JSON 무결성 검증 (validate_analysis)
    - 점수 ↔ decision 일치하는가
    - position_pct가 0% 초과, max% 이하인가
@@ -263,23 +236,8 @@ tick에 안 맞으면 Gate.io가 `AUTO_INVALID_PARAM_TRIGGER_PRICE`로 거부합
 | `validate_slippage` | 주문 전 | 분석 시점 ↔ 현재 가격 차 > 3% |
 | `validate_balance` | 주문 전 | 마진 부족 |
 | Tick size 반올림 | 주문 전 | Gate.io의 가격 단위 불일치 거부 |
-| 스캠 오버라이드 | 분석 시 | `scam_score ≤ -15` → 강제 skip |
 | 세션 중복 체크 | 실행 시 | 같은 세션 이중 주문 |
 | 좀비 주문 정리 | 매 종목 | 이전 세션의 잔여 미체결/트리거 주문 |
-
----
-
-## 효율성 파라미터 (`config.yaml`의 `efficiency_level`)
-
-| 값 | 분석 대상 | 프롬프트 깊이 | 토큰 사용량 |
-|---|---|---|---|
-| 0 | 20종목 전부 | full | 최대 |
-| 1-3 | 이전 스캠 탐지 종목 스킵 | full | 약간 절약 |
-| 4-6 | 하위 순위 점진 스킵 (lv5: 19~20위 스킵) | standard | 보통 |
-| 7-9 | 가격 변동 < N% 스킵 | quick | 상당히 절약 |
-| 10 | 상위 5종목만 | quick | 최소 |
-
-**추가**: 기존 포지션 보유 종목은 efficiency_level과 무관하게 **항상 분석 스킵**.
 
 ---
 
@@ -302,30 +260,24 @@ pip install -r requirements.txt
 
 ### 3. API 키 설정
 
-대화식 스크립트로 두 키를 한 번에 입력:
-
 ```bash
 bash scripts/setup_keys.sh
 ```
 
-(또는 수동: `cp .env.example .env && nano .env` 후 직접 편집)
+> Gate.io API 키 만들기: Gate.io → 계정 → API 관리 → 새 키 → **Perpetual Futures 거래 권한** 필수
 
-> Gate.io API 키 만들기: Gate.io → 계정 → API 관리 → 새 키 → **선물 거래 권한** 필수, IP 화이트리스트 권장
+### 4. Claude Code CLI
 
-### 4. Claude Code CLI 설치
-
-이 프로젝트는 **Claude Code CLI**를 로컬에서 호출합니다 (Max 요금제로 비용 효율적).
-
-설치 후 `claude --version` 으로 확인. 한 번 로그인하면 cron에서도 동작합니다.
+**Claude Code CLI**를 로컬에서 호출합니다 (Max 요금제).
+설치 후 `claude --version`으로 확인, 한 번 로그인 필요.
 
 ### 5. 설정 조정
 
-`config.yaml`에서 트레이딩 파라미터 조정:
+`config.yaml`:
 
 ```yaml
-efficiency_level: 5          # 0(풀분석) ~ 10(최대효율)
 trading:
-  top_n_coins: 20            # 분석 종목 수
+  top_n_coins: 20            # 시총 상위 종목 수
   long_threshold: 10         # 롱 진입 임계 점수
   short_threshold: -10
   leverage: 5
@@ -341,26 +293,14 @@ position_sizing:
 ### 수동 실행 (테스트)
 
 ```bash
-# 전체 파이프라인 1회 실행
+bash scripts/run_pipeline.sh       # 전체 파이프라인 1회
+```
+
+같은 세션 재실행 시:
+
+```bash
+rm -f data/orders/processed_sessions.json
 bash scripts/run_pipeline.sh
-
-# 또는 단계별로
-python scripts/step1_fetch_data.py        # 데이터 수집
-python scripts/step2_ict_charts.py        # ICT 분석 + 차트
-python scripts/step3_claude_analysis.py --manual  # 프롬프트 생성
-
-# Claude Code CLI 수동 호출 (또는 셸 스크립트가 자동으로)
-cat data/analysis/prompts/<session>_master_prompt.txt | claude --print > response.txt
-python scripts/parse_claude_response.py response.txt
-
-# 주문 실행 (실제)
-python scripts/step4_execute_orders.py
-
-# 시뮬레이션만
-python scripts/step4_execute_orders.py --dry-run
-
-# 상태 조회
-python scripts/step4_execute_orders.py --status
 ```
 
 ### 자동 실행 (macOS launchd — 권장)
@@ -370,42 +310,26 @@ bash scripts/install_launchd.sh
 ```
 
 launchd는 macOS 기본 스케줄러로, cron과 달리 **Keychain 접근 가능** (Claude CLI 인증 작동).
-04시, 10시, 16시, 22시(시스템 로컬 시간)에 자동 실행됩니다.
+04시, 10시, 16시, 22시에 자동 실행됩니다.
 
 ```bash
-# 상태 확인
-bash scripts/install_launchd.sh status
-
-# 제거
-bash scripts/install_launchd.sh remove
-
-# 로그 확인
-tail -f logs/launchd_stdout.log
-tail -f logs/pipeline_*.log
+bash scripts/install_launchd.sh status  # 상태 확인
+bash scripts/install_launchd.sh remove  # 제거
+tail -f logs/launchd_stdout.log         # 로그
 ```
-
-> cron도 가능 (`bash scripts/install_cron.sh`) 하지만 macOS에서 Keychain 접근 불가로 Claude CLI 인증이 실패합니다.
 
 ## 유틸리티
 
 ```bash
-# 현재 Gate.io 상태 조회 (잔고, 포지션, 미체결 주문, SL/TP 트리거)
-python scripts/show_state.py
-
-# 주문 없이 시뮬레이션 (각 종목의 진입/HOLD/스킵 판단 미리 보기)
-python scripts/test_orders.py
-
-# 현재 잔고/포지션/세션 요약
-python scripts/step4_execute_orders.py --status
-
-# 시뮬레이션만 (주문 안 나감)
-python scripts/step4_execute_orders.py --dry-run
+python scripts/show_state.py                    # Gate.io 잔고/포지션/트리거 조회
+python scripts/test_orders.py                   # 시뮬레이션 (주문 안 나감)
+python scripts/step4_execute_orders.py --status  # 세션/분석 요약
+python scripts/step4_execute_orders.py --dry-run # dry-run
 ```
 
 ## 비상 종료
 
 ```bash
-# 모든 포지션 즉시 청산 + 미체결 주문 취소
 python scripts/step4_execute_orders.py --close-all
 ```
 
@@ -413,25 +337,35 @@ python scripts/step4_execute_orders.py --close-all
 
 ```
 llm_based_trader/
-├── config.yaml             # 모든 트레이딩 설정
+├── config.yaml             # 트레이딩 설정
 ├── .env                    # API 키 (gitignore)
-├── src/                    # 핵심 모듈
-│   ├── gateio_client.py    # Gate.io API
+├── src/
+│   ├── gateio_client.py    # Gate.io API v4 클라이언트
 │   ├── ict_analysis.py     # ICT 분석 엔진
 │   ├── ict_chart.py        # 차트 시각화 (교체 가능)
-│   ├── claude_analyzer.py  # LLM 호출 + 응답 파싱
-│   ├── order_executor.py   # 주문 실행
-│   ├── order_validator.py  # LLM 실수 방어
-│   ├── position_sizing.py  # Kelly Criterion
-│   └── efficiency.py       # 효율성 파라미터 적용
-├── scripts/                # 파이프라인 진입점
+│   ├── claude_analyzer.py  # Claude 응답 파싱 + 정규화
+│   ├── order_executor.py   # 주문 실행 + 포지션 관리
+│   ├── order_validator.py  # 주문 전 검증 (SL/TP/슬리피지/잔고)
+│   ├── position_sizing.py  # Kelly Criterion 포지션 사이징
+│   ├── prompts.py          # Claude 프롬프트 템플릿
+│   ├── file_manager.py     # 세션 ID, JSON 읽기/쓰기, 중복 방지
+│   ├── config_loader.py    # config.yaml + .env 로더
+│   ├── top_coins.py        # 시총 기준 상위 N종목 선별
+│   ├── candle_fetcher.py   # 5년치 일봉 다운로드
+│   └── logger.py           # 콘솔 + 파일 로깅
+├── scripts/
+│   ├── run_pipeline.sh     # 전체 파이프라인 자동화
 │   ├── step1_fetch_data.py
 │   ├── step2_ict_charts.py
 │   ├── step3_claude_analysis.py
 │   ├── step4_execute_orders.py
 │   ├── parse_claude_response.py
-│   ├── run_pipeline.sh     # 전체 자동화
-│   └── install_cron.sh
+│   ├── show_state.py       # Gate.io 상태 조회
+│   ├── test_orders.py      # 시뮬레이션
+│   ├── install_launchd.sh  # macOS 자동화 (권장)
+│   ├── install_cron.sh     # cron 자동화 (레거시)
+│   ├── setup_keys.sh       # API 키 대화식 입력
+│   └── debug_gateio.py     # API 연결 디버그
 ├── data/
 │   ├── candles/            # 5년치 일봉 CSV
 │   ├── analysis/           # 세션별 ICT/분석 JSON
@@ -443,7 +377,7 @@ llm_based_trader/
 
 ## ICT 차트 모듈 교체
 
-나중에 직접 작성한 ICT 차트 스크립트로 교체하려면 `src/ict_chart.py`만 바꾸면 됩니다. 인터페이스:
+`src/ict_chart.py`만 바꾸면 됩니다. 인터페이스:
 
 ```python
 def generate_ict_chart(df, ict_result, symbol, output_path=None) -> Path:
