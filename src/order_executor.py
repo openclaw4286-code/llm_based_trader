@@ -230,7 +230,7 @@ class OrderExecutor:
 
         stop_loss_pct = analysis.get("stop_loss_pct", 3.0)
         take_profit_pct = analysis.get("take_profit_pct", 6.0)
-        logger.info(f"[{symbol}] Entering: {decision}, {position_pct:.2f}% of balance")
+        logger.info(f"[{symbol}] Entering: {decision}, {position_pct:.2f}% of balance, leverage={leverage}x")
 
         # 계약 정보 조회
         contract_info = self._get_contract_info(symbol)
@@ -347,7 +347,7 @@ class OrderExecutor:
 
         if dry_run:
             order_info["status"] = "dry_run"
-            logger.info(f"[{symbol}] DRY RUN: {decision} {abs(size)} contracts @ ${current_price:,.4f}")
+            logger.info(f"[{symbol}] DRY RUN: {decision} {abs(size)} contracts @ ${current_price:,.4f} (lev={leverage}x)")
             save_order_result(order_info)
             return order_info
 
@@ -369,7 +369,7 @@ class OrderExecutor:
             order_info["entry_price"] = float(order_result.get("fill_price", current_price) or current_price)
 
             logger.info(
-                f"[{symbol}] ORDER PLACED: {decision} {abs(size)} contracts, "
+                f"[{symbol}] ORDER PLACED: {decision} {abs(size)} contracts (lev={leverage}x), "
                 f"order_id={order_info['order_id']}, status={order_info['status']}"
             )
 
