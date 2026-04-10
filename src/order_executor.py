@@ -174,21 +174,8 @@ class OrderExecutor:
             return None
 
         decision = analysis.get("decision", "skip")
-        analysis_skipped = analysis.get("analysis_skipped", False)
-        skip_reason = analysis.get("skip_reason", "")
 
-        # 1. analysis_skipped 처리: 분석을 안 한 경우
-        #    - "existing ... position held" 사유면 → 보유 유지 (HOLD)
-        #    - 그 외 사유 (효율성 필터 등)면 → skip 취급 (포지션 없으면 무시, 있으면 유지)
-        if analysis_skipped:
-            if existing_side:
-                logger.info(f"[{symbol}] Holding {existing_side} position (analysis skipped: {skip_reason})")
-                return None
-            # 포지션 없고 분석 안 했으면 아무것도 안 함
-            self._cleanup_pending_orders(symbol, dry_run)
-            return None
-
-        # 2. 분석 결과가 skip (Claude가 판단한 skip)
+        # 1. Claude가 skip 판단
         if decision == "skip":
             if existing_side:
                 # 보유 중인데 Claude가 skip으로 판단 → 청산

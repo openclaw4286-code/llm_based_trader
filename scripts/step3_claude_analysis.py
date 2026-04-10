@@ -262,71 +262,17 @@ def run_manual_mode():
         logger.error("No top coins found. Run step1 and step2 first.")
         sys.exit(1)
 
-    # 기존 포지션 조회 (이미 포지션이 있는 종목은 분석 스킵 → 토큰 절약)
-    existing_positions = {}
-    try:
-        client = GateIOClient()
-        positions = client.get_futures_positions()
-        for p in positions:
-            sz = int(p.get("size", 0))
-            if sz != 0:
-                existing_positions[p["contract"]] = "long" if sz > 0 else "short"
-        if existing_positions:
-            logger.info(f"Existing positions ({len(existing_positions)}): {', '.join(existing_positions.keys())} → skipping analysis")
-    except Exception as e:
-        logger.warning(f"Could not fetch positions: {e}")
-
     # 프롬프트 저장 디렉토리
     prompts_dir = analysis_dir / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
 
-    # 같은 세션의 이전 프롬프트 파일 정리 (재실행 시 held 종목의 옛 프롬프트가 남아있는 문제 방지)
+    # 같은 세션의 이전 프롬프트 파일 정리
     for old_prompt in prompts_dir.glob(f"{session_id}_*_prompt.txt"):
         old_prompt.unlink()
 
     generated = 0
-    held = 0
     for coin in coins:
         symbol = coin["symbol"]
-
-        # 기존 포지션 있으면 분석 스킵 (HOLD 될 거니까 토큰 낭비 방지)
-        if symbol in existing_positions:
-            side = existing_positions[symbol]
-            logger.info(f"[{symbol}] HELD ({side}) → skipping analysis (saves tokens)")
-            save_analysis_json(symbol, {
-                "technical_score": 0, "technical_reasoning": f"skipped: existing {side} position",
-                "macro_quant_score": 0, "macro_quant_reasoning": "",
-                "scam_score": 0, "scam_reasoning": "",
-                "total_score": 0, "decision": side,
-                "confidence": 0.0,
-                "suggested_position_pct": 0.0, "stop_loss_pct": 0.0,
-                "take_profit_pct": 0.0,
-                "analysis_skipped": True, "skip_reason": f"existing {side} position held",
-            })
-            held += 1
-            continue
-
-        # 효율성 필터
-        should, reason = should_analyze(
-            symbol=symbol,
-            rank=coin["rank"],
-            price_change_24h_pct=coin.get("price_change_24h_pct", 0),
-            volume_24h_usdt=coin.get("volume_24h_usdt", 0),
-            prev_session_id=prev_session_id,
-        )
-
-        if not should:
-            logger.info(f"[{symbol}] SKIPPED: {reason}")
-            save_analysis_json(symbol, {
-                "technical_score": 0, "technical_reasoning": "",
-                "macro_quant_score": 0, "macro_quant_reasoning": "",
-                "scam_score": 0, "scam_reasoning": "",
-                "total_score": 0, "decision": "skip", "confidence": 0.0,
-                "suggested_position_pct": 0.0, "stop_loss_pct": 0.0,
-                "take_profit_pct": 0.0,
-                "analysis_skipped": True, "skip_reason": reason,
-            })
-            continue
 
         # ICT 요약 로드
         ict_path = analysis_dir / f"{session_id}_{symbol}_ict.json"
@@ -356,7 +302,7 @@ def run_manual_mode():
     master_prompt_path = prompts_dir / f"{session_id}_master_prompt.txt"
     _generate_master_prompt(coins, session_id, analysis_dir, master_prompt_path)
 
-    logger.info(f"=== Step 3 Manual Mode Complete: {generated} prompts, {held} held (skipped) ===")
+    logger.info(f"=== Step 3 Manual Mode Complete: {generated} prompts generated ===")
     logger.info(f"Master prompt: {master_prompt_path}")
 
 

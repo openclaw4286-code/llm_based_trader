@@ -2,14 +2,9 @@
 # LLM-Based Crypto Trading Agent Configuration
 # =============================================================
 
-# --- 효율성 파라미터 (0~10) ---
-# 0: 모든 종목 매 세션마다 풀 분석 (20종목 x 4회/일)
-# 10: 최대 효율 (불필요 종목 조기 스킵, 캐시 활용, 변동 없으면 재분석 안함)
-efficiency_level: 5
-
 # --- 거래 설정 ---
 trading:
-  # 인기종목 상위 N개
+  # 시총 상위 N개 종목
   top_n_coins: 20
   # 롱 진입 기준 점수 (기술적 + 거시적/정량적 합산)
   long_threshold: 10
@@ -29,7 +24,6 @@ position_sizing:
   # 단일 포지션 최소 비율 (잔고 대비 %)
   min_position_pct: 0.5
   # 최소 현금 보유 비율 (%)
-  # Kelly Criterion에 의해 자동 계산되지만, 이 값 이하로는 내려가지 않음
   min_cash_reserve_pct: 30.0
   # 전체 투자 한도 (잔고 대비 %)
   max_total_exposure_pct: 60.0
@@ -39,16 +33,9 @@ scoring:
   # 기술적 분석 (ICT 차트 기반)
   technical_min: -25
   technical_max: 25
-  # 거시적/정량적 분석 (뉴스, SNS, 화이트페이퍼 등)
+  # 거시적/정량적 분석 (뉴스, SNS 등)
   macro_quant_min: -25
   macro_quant_max: 25
-
-# --- 스캠 탐지 ---
-scam_detection:
-  # 스캠 의심 시 자동 스킵
-  auto_skip_scam: true
-  # 스캠 판별 기준 점수 (이 이하면 스캠으로 판단)
-  scam_threshold: -15
 
 # --- 데이터 경로 ---
 paths:
