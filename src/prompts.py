@@ -16,6 +16,8 @@ SCORING RULES:
 - If total <= -10: decision = "short"
 - Otherwise: decision = "skip"
 
+NOTE: Do NOT suggest stop_loss or take_profit. SL/TP is calculated separately from ICT structures.
+
 OUTPUT FORMAT (strict JSON, no markdown):
 {
   "technical_score": <int -25 to 25>,
@@ -24,9 +26,7 @@ OUTPUT FORMAT (strict JSON, no markdown):
   "macro_quant_reasoning": "<brief reasoning>",
   "total_score": <int>,
   "decision": "long" | "short" | "skip",
-  "confidence": <float 0.0 to 1.0>,
-  "stop_loss_pct": <float, suggested stop loss % from entry>,
-  "take_profit_pct": <float, suggested take profit % from entry>
+  "confidence": <float 0.0 to 1.0>
 }"""
 
 
@@ -64,10 +64,6 @@ def build_full_analysis_prompt(
    - Review tokenomics and supply dynamics
    - Consider broader crypto market conditions (BTC dominance, total market cap trend)
    - Assess on-chain metrics if applicable (TVL, active addresses, transaction volume)
-
-3. POSITION MANAGEMENT:
-   - Suggest stop_loss_pct based on nearest support/OB level
-   - Suggest take_profit_pct based on nearest resistance/liquidity level
 
 Respond with ONLY the JSON object, no explanation."""
 

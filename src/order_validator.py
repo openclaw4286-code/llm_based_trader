@@ -68,20 +68,8 @@ def validate_analysis(analysis: dict) -> tuple[bool, str]:
     if position_pct > max_pos + 0.01:
         return False, f"position_pct {position_pct}% exceeds max {max_pos}%"
 
-    # 5. SL/TP 거리 검증
-    if decision in ("long", "short"):
-        if sl_pct < MIN_SL_DISTANCE_PCT:
-            return False, f"stop_loss_pct {sl_pct}% too small (min {MIN_SL_DISTANCE_PCT}%)"
-        if sl_pct > MAX_SL_DISTANCE_PCT:
-            return False, f"stop_loss_pct {sl_pct}% too large (max {MAX_SL_DISTANCE_PCT}%)"
-        if tp_pct < MIN_TP_DISTANCE_PCT:
-            return False, f"take_profit_pct {tp_pct}% too small (min {MIN_TP_DISTANCE_PCT}%)"
-        if tp_pct > MAX_TP_DISTANCE_PCT:
-            return False, f"take_profit_pct {tp_pct}% too large (max {MAX_TP_DISTANCE_PCT}%)"
-
-        # 6. 리스크/리워드 비율 (TP가 SL보다 작으면 음의 기댓값)
-        if tp_pct < sl_pct * 0.8:
-            return False, f"unfavorable R:R - TP({tp_pct}%) < SL({sl_pct}%) * 0.8"
+    # SL/TP 검증은 risk_reward.py에서 ICT 구조 기반으로 수행됨
+    # R:R 최소 3:1 검증도 risk_reward.check_rr_ratio()에서 처리
 
     return True, "valid"
 

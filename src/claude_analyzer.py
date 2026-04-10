@@ -64,8 +64,8 @@ Output a JSON array of objects.
 
 For each coin: technical_score(-25~25), macro_quant_score(-25~25).
 total_score = technical + macro_quant. long if >=10, short if <=-10, else skip.
-Output JSON array only, no explanation. Include stop_loss_pct and take_profit_pct.
-Each object must have a "symbol" field."""
+Do NOT include stop_loss or take_profit (calculated separately).
+Output JSON array only, no explanation. Each object must have a "symbol" field."""
 
 
 def parse_batch_response(raw_response: str, symbols: list[str]) -> list[dict]:

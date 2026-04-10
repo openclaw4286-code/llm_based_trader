@@ -29,6 +29,7 @@ from src.order_validator import (
     validate_slippage,
     validate_balance,
 )
+from src.risk_reward import calculate_risk_reward
 from src.logger import setup_logger
 
 logger = setup_logger("order_executor")
@@ -237,8 +238,6 @@ class OrderExecutor:
             # 5. 신규 진입 전에도 좀비 미체결 주문 정리
             self._cleanup_pending_orders(symbol, dry_run)
 
-        stop_loss_pct = analysis.get("stop_loss_pct", 3.0)
-        take_profit_pct = analysis.get("take_profit_pct", 6.0)
         leverage = self.trading_cfg["leverage"]
         logger.info(f"[{symbol}] Entering: {decision}, {position_pct:.2f}% of balance, leverage={leverage}x")
 
@@ -294,27 +293,58 @@ class OrderExecutor:
         if decision == "short":
             size = -size
 
-        # 손절/익절 가격 계산 (tick size로 반올림 필수, 아니면 Gate.io가 거부)
+        # ICT 구조 기반 SL/TP 계산
+        cfg = get_config()
+        analysis_dir = Path(cfg["paths"]["analysis"])
+        from src.file_manager import get_session_id as _get_sid
+        session_id = _get_sid()
+        ict_path = analysis_dir / f"{session_id}_{symbol}_ict.json"
+        ict_summary = {}
+        if ict_path.exists():
+            import json as _json
+            with open(ict_path, "r", encoding="utf-8") as f:
+                ict_summary = _json.load(f)
+
+        rr = calculate_risk_reward(decision, current_price, ict_summary)
         tick_str = str(contract_info.get("order_price_round", "") or "")
+
+        # R:R 검증 (최소 3:1)
+        if not rr["rr_passes"]:
+            logger.warning(f"[{symbol}] R:R {rr['rr_ratio']}:1 below minimum, skipping")
+            return {
+                "session_id": get_session_id(), "symbol": symbol,
+                "decision": decision, "status": "rr_rejected",
+                "error": f"R:R {rr['rr_ratio']}:1 below minimum", "size": 0,
+            }
+
+        # SL tick 반올림
         if decision == "long":
-            stop_loss_price_raw = current_price * (1 - stop_loss_pct / 100)
-            take_profit_price_raw = current_price * (1 + take_profit_pct / 100)
-            # 롱 SL은 아래로 반올림(더 안전), 롱 TP는 위로 반올림(수수료 방어)
-            stop_loss_price = _round_to_tick(stop_loss_price_raw, tick_str, ROUND_DOWN)
-            take_profit_price = _round_to_tick(take_profit_price_raw, tick_str, ROUND_UP)
+            stop_loss_price = _round_to_tick(rr["sl_price"], tick_str, ROUND_DOWN)
         else:
-            stop_loss_price_raw = current_price * (1 + stop_loss_pct / 100)
-            take_profit_price_raw = current_price * (1 - take_profit_pct / 100)
-            # 숏 SL은 위로 반올림, 숏 TP는 아래로 반올림
-            stop_loss_price = _round_to_tick(stop_loss_price_raw, tick_str, ROUND_UP)
-            take_profit_price = _round_to_tick(take_profit_price_raw, tick_str, ROUND_DOWN)
+            stop_loss_price = _round_to_tick(rr["sl_price"], tick_str, ROUND_UP)
+
+        # TP 타겟들도 tick 반올림
+        tp_targets_rounded = []
+        for tp in rr["tp_targets"]:
+            if decision == "long":
+                tp_price = _round_to_tick(tp["price"], tick_str, ROUND_UP)
+            else:
+                tp_price = _round_to_tick(tp["price"], tick_str, ROUND_DOWN)
+            tp_targets_rounded.append({
+                "price": tp_price,
+                "pct_of_position": tp["pct_of_position"],
+                "reason": tp["reason"],
+            })
+
+        # 1차 TP를 대표 TP로 사용 (로깅/검증용)
+        take_profit_price = tp_targets_rounded[0]["price"] if tp_targets_rounded else stop_loss_price
 
         logger.info(
-            f"[{symbol}] tick={tick_str}, entry=${current_price}, "
-            f"SL={stop_loss_price}, TP={take_profit_price}"
+            f"[{symbol}] ICT R:R={rr['rr_ratio']}:1, SL={stop_loss_price} ({rr['sl_pct']}%), "
+            f"TP1={take_profit_price} ({rr['tp1_pct']}%), targets={len(tp_targets_rounded)}"
         )
 
-        # SL/TP 가격 방향성 검증 (LLM이 SL/TP를 뒤바꾸는 실수 차단)
+        # SL/TP 방향 검증
         ok, reason = validate_order_prices(
             decision, current_price, float(stop_loss_price), float(take_profit_price)
         )
@@ -382,11 +412,29 @@ class OrderExecutor:
                 f"order_id={order_info['order_id']}, status={order_info['status']}"
             )
 
-            # 손절 주문 (조건부 주문)
+            # 손절 주문 (전체 포지션)
             self._place_stop_loss(symbol, size, stop_loss_price)
 
-            # 익절 주문 (조건부 주문)
-            self._place_take_profit(symbol, size, take_profit_price)
+            # 멀티 TP 주문 (분할 청산)
+            total_size = abs(size)
+            remaining = total_size
+            for i, tp in enumerate(tp_targets_rounded):
+                if remaining <= 0:
+                    break
+                # 마지막 TP는 남은 전량
+                if i == len(tp_targets_rounded) - 1:
+                    tp_size = remaining
+                else:
+                    tp_size = max(1, int(total_size * tp["pct_of_position"] / 100))
+                    tp_size = min(tp_size, remaining)
+
+                tp_order_size = -tp_size if size > 0 else tp_size
+                try:
+                    self._place_take_profit(symbol, tp_order_size, tp["price"])
+                    logger.info(f"[{symbol}] TP{i+1}: {tp_size} contracts @ {tp['price']} ({tp['reason']})")
+                except Exception as e:
+                    logger.warning(f"[{symbol}] TP{i+1} failed: {e}")
+                remaining -= tp_size
 
         except Exception as e:
             order_info["status"] = "failed"
