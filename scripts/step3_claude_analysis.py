@@ -280,6 +280,10 @@ def run_manual_mode():
     prompts_dir = analysis_dir / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
 
+    # 같은 세션의 이전 프롬프트 파일 정리 (재실행 시 held 종목의 옛 프롬프트가 남아있는 문제 방지)
+    for old_prompt in prompts_dir.glob(f"{session_id}_*_prompt.txt"):
+        old_prompt.unlink()
+
     generated = 0
     held = 0
     for coin in coins:
