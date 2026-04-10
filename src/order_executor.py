@@ -175,21 +175,43 @@ class OrderExecutor:
 
         decision = analysis.get("decision", "skip")
         analysis_skipped = analysis.get("analysis_skipped", False)
+        skip_reason = analysis.get("skip_reason", "")
 
-        # 1. 분석이 skip이거나 효율성으로 스킵됨
-        if decision == "skip" or analysis_skipped:
+        # 1. analysis_skipped 처리: 분석을 안 한 경우
+        #    - "existing ... position held" 사유면 → 보유 유지 (HOLD)
+        #    - 그 외 사유 (효율성 필터 등)면 → skip 취급 (포지션 없으면 무시, 있으면 유지)
+        if analysis_skipped:
             if existing_side:
-                # 보유 중인데 더이상 추천 안함 → 청산
-                logger.info(f"[{symbol}] Closing {existing_side} position (analysis: skip)")
+                logger.info(f"[{symbol}] Holding {existing_side} position (analysis skipped: {skip_reason})")
+                return None
+            # 포지션 없고 분석 안 했으면 아무것도 안 함
+            self._cleanup_pending_orders(symbol, dry_run)
+            return None
+
+        # 2. 분석 결과가 skip (Claude가 판단한 skip)
+        if decision == "skip":
+            if existing_side:
+                # 보유 중인데 Claude가 skip으로 판단 → 청산
+                logger.info(f"[{symbol}] Closing {existing_side} position (Claude decision: skip)")
                 if not dry_run:
                     self._cleanup_pending_orders(symbol, dry_run=False)
                     self._close_position(symbol, existing_size)
+                # 청산 가격 조회 (로그용)
+                close_price = 0.0
+                try:
+                    tickers = self.client.get_futures_tickers(contract=symbol)
+                    if tickers:
+                        close_price = float(tickers[0].get("last", 0))
+                except Exception:
+                    pass
                 return {
                     "session_id": get_session_id(),
                     "symbol": symbol,
                     "decision": "close",
                     "side": "sell" if existing_size > 0 else "buy",
                     "size": -existing_size,
+                    "entry_price": close_price,
+                    "position_usdt": 0.0,
                     "status": "closed_on_skip" if not dry_run else "dry_run_close",
                     "error": "",
                 }
