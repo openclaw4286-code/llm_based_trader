@@ -1,6 +1,10 @@
 from __future__ import annotations
 """
-인기종목 수집 - Gate.io에서 24시간 거래량 기준 상위 N개 USDT 선물 종목을 선별합니다.
+인기종목 수집 - Gate.io에서 시가총액(= 가격 × 거래량 proxy) 기준 상위 N개 USDT 선물 종목을 선별합니다.
+
+Gate.io 선물 API는 직접적인 시총 필드를 제공하지 않으므로,
+mark_price × volume_24h_base 를 시총 대용값(proxy)으로 사용합니다.
+금/은 등 상품 선물도 포함됩니다.
 
 스테이블코인 및 래핑 토큰은 제외합니다.
 """
@@ -26,17 +30,20 @@ EXCLUDE_SYMBOLS = {
 
 def fetch_top_coins(n: int = 20) -> list[dict]:
     """
-    24시간 거래량 기준 상위 N개 USDT 선물 종목을 반환합니다.
+    시가총액 proxy 기준 상위 N개 USDT 선물 종목을 반환합니다.
+    금(XAU), 은(XAG) 등 상품 선물도 포함됩니다.
+
+    시총 proxy = mark_price × volume_24h_base (Gate.io가 직접 시총을 안 줘서 대용)
+    대형 코인(BTC, ETH)은 가격 × 거래량이 압도적이라 자연스럽게 상위에 옵니다.
 
     Returns:
-        [{"symbol": "BTC_USDT", "rank": 1, "volume_24h_usdt": ..., ...}, ...]
+        [{"symbol": "BTC_USDT", "rank": 1, "volume_24h_usdt": ..., "market_cap_proxy": ..., ...}, ...]
     """
     client = GateIOClient()
 
-    # 선물 티커에서 거래량 조회
+    # 선물 티커에서 조회
     tickers = client.get_futures_tickers()
 
-    # USDT 마켓만 필터링, 제외 종목 제거
     usdt_tickers = []
     for t in tickers:
         contract = t.get("contract", "")
@@ -46,30 +53,37 @@ def fetch_top_coins(n: int = 20) -> list[dict]:
             continue
 
         volume_quote = float(t.get("volume_24h_quote", 0) or 0)
+        volume_base = float(t.get("volume_24h_base", 0) or 0)
         last_price = float(t.get("last", 0) or 0)
+        mark_price = float(t.get("mark_price", 0) or 0)
         change_pct = float(t.get("change_percentage", 0) or 0)
 
-        if volume_quote <= 0 or last_price <= 0:
+        if last_price <= 0:
             continue
+
+        # 시총 proxy: mark_price × base volume (가격 높고 거래 많은 종목 = 대형)
+        price = mark_price if mark_price > 0 else last_price
+        market_cap_proxy = price * volume_base if volume_base > 0 else volume_quote
 
         usdt_tickers.append({
             "symbol": contract,
             "volume_24h_usdt": volume_quote,
+            "market_cap_proxy": market_cap_proxy,
             "last_price": last_price,
             "price_change_24h_pct": change_pct,
         })
 
-    # 거래량 기준 내림차순 정렬
-    usdt_tickers.sort(key=lambda x: x["volume_24h_usdt"], reverse=True)
+    # 시총 proxy 기준 내림차순 정렬
+    usdt_tickers.sort(key=lambda x: x["market_cap_proxy"], reverse=True)
 
     # 상위 N개 선택 및 순위 부여
     top = usdt_tickers[:n]
     for i, coin in enumerate(top):
         coin["rank"] = i + 1
 
-    logger.info(f"Top {len(top)} coins by 24h volume fetched")
+    logger.info(f"Top {len(top)} coins by market cap proxy fetched")
     for coin in top[:5]:
-        logger.info(f"  #{coin['rank']} {coin['symbol']}: ${coin['volume_24h_usdt']:,.0f}")
+        logger.info(f"  #{coin['rank']} {coin['symbol']}: mcap_proxy=${coin['market_cap_proxy']:,.0f}")
 
     return top
 

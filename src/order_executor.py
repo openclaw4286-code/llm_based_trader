@@ -276,15 +276,10 @@ class OrderExecutor:
         else:
             size = int((position_usdt * leverage) / current_price)
 
-        min_size = int(contract_info.get("order_size_min", 1)) or 1  # 0이면 1로 강제
-        if abs(size) < min_size:
-            # 최소 수량으로 올릴 때의 실제 비용 체크
-            min_cost = min_size * current_price * quanto_multiplier / leverage
-            if min_cost > balance * 0.2:
-                logger.warning(f"[{symbol}] Min size cost ${min_cost:.2f} > 20% of balance, skipping")
-                return None
-            logger.warning(f"[{symbol}] Calculated size {size} below minimum {min_size}, using minimum")
-            size = min_size
+        min_size = int(contract_info.get("order_size_min", 1))
+        if abs(size) < max(min_size, 1):
+            logger.warning(f"[{symbol}] Size {size} below minimum {max(min_size, 1)}, skipping (balance too small)")
+            return None
 
         # 숏이면 음수
         if decision == "short":
