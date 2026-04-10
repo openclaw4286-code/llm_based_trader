@@ -266,9 +266,15 @@ def run_manual_mode():
     prompts_dir = analysis_dir / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
 
-    # 같은 세션의 이전 프롬프트 파일 정리
+    # 같은 세션의 이전 파일 정리 (재실행 시 옛 분석 결과가 남아있는 문제 방지)
     for old_prompt in prompts_dir.glob(f"{session_id}_*_prompt.txt"):
         old_prompt.unlink()
+    for old_analysis in analysis_dir.glob(f"{session_id}_*.json"):
+        # ICT JSON과 top_coins는 step2에서 생성한 것이므로 보존
+        if old_analysis.name.endswith("_ict.json") or "_top_coins.json" in old_analysis.name:
+            continue
+        old_analysis.unlink()
+        logger.debug(f"Cleaned old analysis: {old_analysis.name}")
 
     generated = 0
     for coin in coins:
