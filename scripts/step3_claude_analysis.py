@@ -30,9 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.config_loader import get_config
 from src.top_coins import load_top_coins
 from src.file_manager import get_session_id, save_analysis_json, load_all_analysis_for_session
-from src.efficiency import should_analyze, get_analysis_depth
 from src.claude_analyzer import (
-    analyze_coin_api,
     generate_prompt_for_claude_code,
     build_batch_prompt,
     parse_batch_response,
