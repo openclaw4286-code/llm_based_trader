@@ -230,6 +230,7 @@ class OrderExecutor:
 
         stop_loss_pct = analysis.get("stop_loss_pct", 3.0)
         take_profit_pct = analysis.get("take_profit_pct", 6.0)
+        leverage = self.trading_cfg["leverage"]
         logger.info(f"[{symbol}] Entering: {decision}, {position_pct:.2f}% of balance, leverage={leverage}x")
 
         # 계약 정보 조회
@@ -267,7 +268,6 @@ class OrderExecutor:
             }
 
         position_usdt = balance * (position_pct / 100.0)
-        leverage = self.trading_cfg["leverage"]
         quanto_multiplier = float(contract_info.get("quanto_multiplier", 1))
 
         # 계약 수량 계산: (투자금 * 레버리지) / (가격 * 계약단위)
