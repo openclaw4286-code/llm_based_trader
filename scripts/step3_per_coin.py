@@ -89,7 +89,7 @@ def compute_position_pct(analysis: dict, running_exposure: float, max_exposure: 
     total_score = analysis.get("total_score", 0)
 
     win_rate = 0.5 + (confidence - 0.5) * 0.3
-    win_loss_ratio = 1.0 + abs(total_score) / 50.0 * 1.5
+    win_loss_ratio = 1.0 + abs(total_score) / 20.0 * 1.5  # max |score|=20
 
     raw_kelly = kelly_criterion(win_rate, win_loss_ratio)
     adjusted = raw_kelly * kelly_frac * 100.0

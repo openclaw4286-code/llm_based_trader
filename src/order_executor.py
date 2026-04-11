@@ -39,9 +39,8 @@ def compute_dynamic_leverage(score: int, decision: str) -> int:
     """
     점수 절대값 크기에 따라 레버리지를 선형 보간합니다.
 
-    config.yaml의 trading.dynamic_leverage 설정 기반:
-      - long: +10 → 3배, +50 → 10배
-      - short: -20 → 2배, -50 → 5배
+    config.yaml의 trading.dynamic_leverage 설정 기반으로 min_score ~ max_score 구간을
+    min_leverage ~ max_leverage 구간으로 선형 보간합니다.
 
     dynamic_leverage.enabled = false 이면 trading.leverage 고정값 사용.
     """

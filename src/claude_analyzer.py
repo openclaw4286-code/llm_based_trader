@@ -81,8 +81,9 @@ Output a JSON array of objects.
 
 {chr(10).join(coin_sections)}
 
-For each coin: technical_score(-25~25), macro_quant_score(-25~25).
-total_score = technical + macro_quant. long if >=10, short if <=-10, else skip.
+For each coin: technical_score(-10~10), macro_quant_score(-10~10).
+total_score = technical + macro_quant (range -20 to +20).
+Python computes final decision based on configured thresholds.
 Do NOT include stop_loss or take_profit (calculated separately).
 Output JSON array only, no explanation. Each object must have a "symbol" field."""
 
@@ -144,9 +145,9 @@ def _normalize_result(data: dict, symbol: str) -> dict:
     macro = _safe_int(data.get("macro_quant_score"), 0)
     total = tech + macro
 
-    tech = max(-25, min(25, tech))
-    macro = max(-25, min(25, macro))
-    total = max(-50, min(50, total))
+    tech = max(-10, min(10, tech))
+    macro = max(-10, min(10, macro))
+    total = max(-20, min(20, total))
 
     cfg = get_config()
     long_thresh = cfg["trading"]["long_threshold"]

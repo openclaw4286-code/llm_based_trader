@@ -74,7 +74,7 @@ def calculate_position_sizes(analyses: list[dict], balance_usdt: float) -> list[
 
         # confidence를 승률로, score 절대값을 수익/손실 비율로 변환
         win_rate = 0.5 + (confidence - 0.5) * 0.3  # 0.35 ~ 0.65 범위로 보수적 조정
-        win_loss_ratio = 1.0 + abs(total_score) / 50.0 * 1.5  # 1.0 ~ 2.5
+        win_loss_ratio = 1.0 + abs(total_score) / 20.0 * 1.5  # 1.0 ~ 2.5 (max |score|=20)
 
         raw_kelly = kelly_criterion(win_rate, win_loss_ratio)
         adjusted_kelly = raw_kelly * kelly_frac  # fractional Kelly

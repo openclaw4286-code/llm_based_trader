@@ -16,16 +16,12 @@ ANALYSIS_SCHEMA = {
     "timestamp": "2026-04-06T00:05:00",  # 분석 시각
 
     # 기술적 분석 (ICT 차트 기반)
-    "technical_score": 0,                # -25 ~ +25
+    "technical_score": 0,                # -10 ~ +10
     "technical_reasoning": "",           # 판단 근거
 
     # 거시적/정량적 분석
-    "macro_quant_score": 0,              # -25 ~ +25
+    "macro_quant_score": 0,              # -10 ~ +10
     "macro_quant_reasoning": "",         # 판단 근거
-
-    # 스캠 탐지
-    "scam_score": 0,                     # -25(스캠 확실) ~ +25(안전)
-    "scam_reasoning": "",
 
     # 최종 판단
     "total_score": 0,                    # technical + macro_quant

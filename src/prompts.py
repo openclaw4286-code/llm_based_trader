@@ -9,20 +9,19 @@ Claude Code가 각 종목을 분석할 때 사용하는 프롬프트를 생성�
 SYSTEM_PROMPT = """You are a professional crypto trading analyst. You perform two types of analysis and output structured JSON.
 
 SCORING RULES:
-- Technical Score: -25 to +25 (based on ICT chart analysis)
-- Macro/Quantitative Score: -25 to +25 (based on news, SNS, fundamentals)
-- Total = Technical + Macro/Quant
-- If total >= 10: decision = "long"
-- If total <= -10: decision = "short"
-- Otherwise: decision = "skip"
+- Technical Score: -10 to +10 (based on ICT chart analysis)
+- Macro/Quantitative Score: -10 to +10 (based on news, SNS, fundamentals)
+- Total = Technical + Macro/Quant (range: -20 to +20)
+- Python code will compute the final decision based on configured thresholds.
+- Still output your preferred decision ("long" / "short" / "skip") as guidance.
 
 NOTE: Do NOT suggest stop_loss or take_profit. SL/TP is calculated separately from ICT structures.
 
 OUTPUT FORMAT (strict JSON, no markdown):
 {
-  "technical_score": <int -25 to 25>,
+  "technical_score": <int -10 to 10>,
   "technical_reasoning": "<brief reasoning>",
-  "macro_quant_score": <int -25 to 25>,
+  "macro_quant_score": <int -10 to 10>,
   "macro_quant_reasoning": "<brief reasoning>",
   "total_score": <int>,
   "decision": "long" | "short" | "skip",
@@ -75,7 +74,7 @@ def build_full_analysis_prompt(
 {ict_data}
 {news_section}{econ_section}
 == YOUR TASK ==
-1. TECHNICAL ANALYSIS (-25 to +25):
+1. TECHNICAL ANALYSIS (-10 to +10):
    - FIRST: Read the chart image file (if provided above) and visually assess the structure
    - Cross-reference the visual patterns with the numerical ICT summary
    - Evaluate market structure (BOS/CHoCH trend direction)
@@ -85,7 +84,7 @@ def build_full_analysis_prompt(
    - Determine premium/discount zone (buy in discount, sell in premium)
    - OTE zone alignment (is price in optimal trade entry range?)
 
-2. MACRO/QUANTITATIVE ANALYSIS (-25 to +25):
+2. MACRO/QUANTITATIVE ANALYSIS (-10 to +10):
    - PRIORITIZE the RECENT NEWS section above if present (freshest signal)
    - CONSIDER UPCOMING ECONOMIC CALENDAR events (FOMC, CPI, NFP, etc.):
      * If a high-impact event is within 6 hours, REDUCE conviction (expect volatility)
