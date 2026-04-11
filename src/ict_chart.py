@@ -49,8 +49,8 @@ def generate_ict_chart(
         cfg = get_config()
         chart_dir = Path(cfg["paths"]["charts"])
         chart_dir.mkdir(parents=True, exist_ok=True)
-        session_id = get_session_id()
-        output_path = chart_dir / f"{session_id}_{symbol}.png"
+        # 세션 프리픽스 없이 심볼명만 사용 (매 세션마다 덮어씀)
+        output_path = chart_dir / f"{symbol}.png"
     else:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)

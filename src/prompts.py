@@ -36,6 +36,7 @@ def build_full_analysis_prompt(
     coin_info: dict,
     current_price: float,
     news_text: str = "",
+    chart_path: str = "",
 ) -> str:
     """풀 분석 프롬프트를 생성합니다."""
     ict_data = _format_ict_summary(ict_summary)
@@ -45,16 +46,28 @@ def build_full_analysis_prompt(
     if news_text and news_text != "(no recent news found)":
         news_section = f"\n== RECENT NEWS (last 24h, from RSS feeds) ==\n{news_text}\n"
 
+    chart_section = ""
+    if chart_path:
+        chart_section = (
+            f"\n== ICT CHART IMAGE ==\n"
+            f"Chart file: {chart_path}\n"
+            f"READ THIS IMAGE using the Read tool before scoring. Visually verify OB, FVG, "
+            f"Liquidity, BOS/CHoCH markers, and current price position on the chart. "
+            f"Use the visual information together with the numerical ICT summary below.\n"
+        )
+
     return f"""Analyze {symbol} for a trading decision.
 
 == COIN INFO ==
 {coin_data}
-
-== ICT TECHNICAL ANALYSIS (Daily Chart) ==
+{chart_section}
+== ICT TECHNICAL ANALYSIS (Daily Chart — numerical summary) ==
 {ict_data}
 {news_section}
 == YOUR TASK ==
 1. TECHNICAL ANALYSIS (-25 to +25):
+   - FIRST: Read the chart image file (if provided above) and visually assess the structure
+   - Cross-reference the visual patterns with the numerical ICT summary
    - Evaluate market structure (BOS/CHoCH trend direction)
    - Assess order block proximity (is price near an active bullish/bearish OB?)
    - Check FVG status (unfilled gaps as potential targets/support)

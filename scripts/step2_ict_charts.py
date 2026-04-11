@@ -111,6 +111,21 @@ def main():
     # 2. 각 종목 분석 및 차트 생성
     analysis_dir = Path(cfg["paths"]["analysis"])
     analysis_dir.mkdir(parents=True, exist_ok=True)
+    chart_dir = Path(cfg["paths"]["charts"])
+    chart_dir.mkdir(parents=True, exist_ok=True)
+
+    # 이전 세션 프리픽스가 붙은 옛 파일 정리 (혼란 방지)
+    # 새로운 파일명은 세션 프리픽스 없는 {symbol}.png, {symbol}_ict.json
+    import re as _re
+    session_pattern = _re.compile(r"^\d{8}_\d{2}_.+\.(png|json)$")
+    for old_file in chart_dir.glob("*.png"):
+        if session_pattern.match(old_file.name):
+            old_file.unlink()
+            logger.debug(f"Removed stale chart: {old_file.name}")
+    for old_file in analysis_dir.glob("*_ict.json"):
+        if session_pattern.match(old_file.name):
+            old_file.unlink()
+            logger.debug(f"Removed stale ICT JSON: {old_file.name}")
 
     success_count = 0
     fail_count = 0
@@ -134,13 +149,14 @@ def main():
             chart_path = generate_ict_chart(df, ict_result, symbol)
 
             # ICT 요약을 JSON으로 저장 (Claude Code용)
+            # 세션 프리픽스 없이 심볼명만 사용 (매 세션마다 덮어씀)
             ict_summary = serialize_ict_summary(ict_result)
             ict_summary["symbol"] = symbol
             ict_summary["session_id"] = session_id
             ict_summary["chart_path"] = str(chart_path)
             ict_summary["candle_count"] = len(df)
 
-            json_path = analysis_dir / f"{session_id}_{symbol}_ict.json"
+            json_path = analysis_dir / f"{symbol}_ict.json"
             with open(json_path, "w", encoding="utf-8") as f:
                 json.dump(ict_summary, f, ensure_ascii=False, indent=2, default=str)
 

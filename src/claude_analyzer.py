@@ -24,9 +24,12 @@ def generate_prompt_for_claude_code(
     current_price: float,
     rank: int,
     news_text: str = "",
+    chart_path: str = "",
 ) -> str:
     """Claude Code용 프롬프트를 생성합니다."""
-    return build_full_analysis_prompt(symbol, ict_summary, coin_info, current_price, news_text)
+    return build_full_analysis_prompt(
+        symbol, ict_summary, coin_info, current_price, news_text, chart_path
+    )
 
 
 def parse_and_save_response(symbol: str, raw_response: str) -> Optional[dict]:
@@ -43,11 +46,19 @@ def build_batch_prompt(coins_data: list[dict]) -> str:
     coin_sections = []
     for cd in coins_data:
         summary = cd["ict_summary"].get("summary", {})
+        chart_line = ""
+        if cd.get("chart_path"):
+            chart_line = f"\nChart image: {cd['chart_path']}"
+        news_line = ""
+        if cd.get("news_text") and cd["news_text"] != "(no recent news found)":
+            news_line = f"\nRecent news:\n{cd['news_text']}"
+
         coin_sections.append(
             f"--- {cd['symbol']} (Rank #{cd['rank']}) ---\n"
             f"Price: ${cd['current_price']:,.6f}, "
             f"Vol24h: ${cd['coin_info'].get('volume_24h_usdt', 0):,.0f}, "
-            f"Change24h: {cd['coin_info'].get('price_change_24h_pct', 0):.2f}%\n"
+            f"Change24h: {cd['coin_info'].get('price_change_24h_pct', 0):.2f}%"
+            f"{chart_line}\n"
             f"Trend: {summary.get('current_trend','?')}, "
             f"Zone: {summary.get('premium_discount_zone','?')}, "
             f"Fib: {summary.get('fib_level',0):.3f}, "
@@ -56,9 +67,15 @@ def build_batch_prompt(coins_data: list[dict]) -> str:
             f"FVGs: {summary.get('active_bullish_fvgs',0)}B/{summary.get('active_bearish_fvgs',0)}S\n"
             f"BOS(30d): {summary.get('recent_bos_bullish',0)}B/{summary.get('recent_bos_bearish',0)}S, "
             f"CHoCH: {summary.get('recent_choch_count',0)}"
+            f"{news_line}"
         )
 
     return f"""Analyze the following {len(coins_data)} coins. For EACH coin, output a JSON object.
+
+IMPORTANT: Use the Read tool to load EACH chart image file listed above before scoring.
+Visually verify the ICT structure (OB, FVG, Liquidity, BOS/CHoCH) and cross-reference
+with the numerical summary.
+
 Output a JSON array of objects.
 
 {chr(10).join(coin_sections)}

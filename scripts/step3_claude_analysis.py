@@ -284,8 +284,8 @@ def run_manual_mode():
     for coin in coins:
         symbol = coin["symbol"]
 
-        # ICT 요약 로드
-        ict_path = analysis_dir / f"{session_id}_{symbol}_ict.json"
+        # ICT 요약 로드 (세션 프리픽스 없이)
+        ict_path = analysis_dir / f"{symbol}_ict.json"
         if not ict_path.exists():
             logger.warning(f"[{symbol}] No ICT data")
             continue
@@ -297,6 +297,9 @@ def run_manual_mode():
         news_items = news_by_symbol.get(symbol, [])
         news_text = format_news_for_prompt(news_items)
 
+        # 차트 이미지 경로 (세션 프리픽스 없이, 매번 덮어씀)
+        chart_abs_path = str((Path(cfg["paths"]["charts"]) / f"{symbol}.png").resolve())
+
         prompt = generate_prompt_for_claude_code(
             symbol=symbol,
             ict_summary=ict_summary,
@@ -304,6 +307,7 @@ def run_manual_mode():
             current_price=coin.get("last_price", 0),
             rank=coin.get("rank", 99),
             news_text=news_text,
+            chart_path=chart_abs_path,
         )
 
         # 프롬프트를 파일로 저장
