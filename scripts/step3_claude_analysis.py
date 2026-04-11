@@ -260,6 +260,12 @@ def run_manual_mode():
         logger.error("No top coins found. Run step1 and step2 first.")
         sys.exit(1)
 
+    # 뉴스 수집 (RSS 피드에서 최근 24시간)
+    from src.news_fetcher import fetch_news_for_symbols, format_news_for_prompt
+    logger.info("Fetching recent crypto news from RSS feeds...")
+    symbols = [c["symbol"] for c in coins]
+    news_by_symbol = fetch_news_for_symbols(symbols, hours=24)
+
     # 프롬프트 저장 디렉토리
     prompts_dir = analysis_dir / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
@@ -287,12 +293,17 @@ def run_manual_mode():
         with open(ict_path, "r", encoding="utf-8") as f:
             ict_summary = json.load(f)
 
+        # 뉴스 추가
+        news_items = news_by_symbol.get(symbol, [])
+        news_text = format_news_for_prompt(news_items)
+
         prompt = generate_prompt_for_claude_code(
             symbol=symbol,
             ict_summary=ict_summary,
             coin_info=coin,
             current_price=coin.get("last_price", 0),
             rank=coin.get("rank", 99),
+            news_text=news_text,
         )
 
         # 프롬프트를 파일로 저장

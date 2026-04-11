@@ -35,10 +35,15 @@ def build_full_analysis_prompt(
     ict_summary: dict,
     coin_info: dict,
     current_price: float,
+    news_text: str = "",
 ) -> str:
     """풀 분석 프롬프트를 생성합니다."""
     ict_data = _format_ict_summary(ict_summary)
     coin_data = _format_coin_info(coin_info, current_price)
+
+    news_section = ""
+    if news_text and news_text != "(no recent news found)":
+        news_section = f"\n== RECENT NEWS (last 24h, from RSS feeds) ==\n{news_text}\n"
 
     return f"""Analyze {symbol} for a trading decision.
 
@@ -47,7 +52,7 @@ def build_full_analysis_prompt(
 
 == ICT TECHNICAL ANALYSIS (Daily Chart) ==
 {ict_data}
-
+{news_section}
 == YOUR TASK ==
 1. TECHNICAL ANALYSIS (-25 to +25):
    - Evaluate market structure (BOS/CHoCH trend direction)
@@ -58,10 +63,9 @@ def build_full_analysis_prompt(
    - OTE zone alignment (is price in optimal trade entry range?)
 
 2. MACRO/QUANTITATIVE ANALYSIS (-25 to +25):
-   - Assess the project's fundamentals and real-world utility
-   - Consider recent news sentiment and market narrative
-   - Evaluate social media sentiment and community activity
-   - Review tokenomics and supply dynamics
+   - PRIORITIZE the RECENT NEWS section above if present (freshest signal)
+   - Assess news sentiment and market narrative
+   - Evaluate tokenomics and supply dynamics
    - Consider broader crypto market conditions (BTC dominance, total market cap trend)
    - Assess on-chain metrics if applicable (TVL, active addresses, transaction volume)
 

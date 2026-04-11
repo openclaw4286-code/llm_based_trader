@@ -23,9 +23,10 @@ def generate_prompt_for_claude_code(
     coin_info: dict,
     current_price: float,
     rank: int,
+    news_text: str = "",
 ) -> str:
     """Claude Code용 프롬프트를 생성합니다."""
-    return build_full_analysis_prompt(symbol, ict_summary, coin_info, current_price)
+    return build_full_analysis_prompt(symbol, ict_summary, coin_info, current_price, news_text)
 
 
 def parse_and_save_response(symbol: str, raw_response: str) -> Optional[dict]:
