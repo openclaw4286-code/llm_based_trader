@@ -83,6 +83,7 @@ def calculate_tp_targets(
     decision: str,
     current_price: float,
     ict_summary: dict,
+    sl_price: float = 0.0,
 ) -> list[dict]:
     """
     ICT 구조 기반으로 멀티 TP 타겟을 결정합니다.
@@ -100,7 +101,14 @@ def calculate_tp_targets(
         {"pct": 30, "target": "fvg"},
         {"pct": 20, "target": "opposite_ob"},
     ])
-    fallback_pct = rr_cfg.get("tp_fallback_pct", 6.0) / 100.0
+    min_rr = rr_cfg.get("min_rr_ratio", 3.0)
+
+    # SL 거리 기반 폴백 계산 (최소 R:R 보장)
+    # TP1 = SL 거리 × min_rr, TP2 = × (min_rr + 0.5), TP3 = × (min_rr + 1.0)
+    if sl_price > 0:
+        sl_distance = abs(current_price - sl_price)
+    else:
+        sl_distance = current_price * 0.03  # 안전 폴백
 
     liqs = ict_summary.get("unswept_liquidity", [])
     fvgs = ict_summary.get("active_fvgs", [])
@@ -127,7 +135,10 @@ def calculate_tp_targets(
             "opposite_ob": ob_prices,
         }
 
-        for tp_spec in tp_config:
+        # 폴백 배수: TP1 = min_rr, TP2 = min_rr+0.5, TP3 = min_rr+1.0
+        fallback_multipliers = [min_rr, min_rr + 0.5, min_rr + 1.0]
+
+        for i, tp_spec in enumerate(tp_config):
             target_type = tp_spec["target"]
             pct = tp_spec["pct"]
             pool = price_pools.get(target_type, [])
@@ -136,13 +147,9 @@ def calculate_tp_targets(
                 price = pool.pop(0)  # 가장 가까운 것 사용
                 targets.append({"price": price, "pct_of_position": pct, "reason": target_type})
             else:
-                # 해당 타입의 레벨이 없으면 이전 TP에서 확장
-                if targets:
-                    last_price = targets[-1]["price"]
-                    extended = last_price * (1 + fallback_pct / 3)
-                else:
-                    extended = current_price * (1 + fallback_pct)
-                targets.append({"price": extended, "pct_of_position": pct, "reason": f"{target_type}_fallback"})
+                mult = fallback_multipliers[min(i, len(fallback_multipliers) - 1)]
+                extended = current_price + (sl_distance * mult)
+                targets.append({"price": extended, "pct_of_position": pct, "reason": f"{target_type}_fallback_{mult}x"})
 
     else:  # short
         liq_prices = [l["price"] for l in liqs if l["type"] == "sell_side" and l["price"] < current_price]
@@ -160,7 +167,9 @@ def calculate_tp_targets(
             "opposite_ob": ob_prices,
         }
 
-        for tp_spec in tp_config:
+        fallback_multipliers = [min_rr, min_rr + 0.5, min_rr + 1.0]
+
+        for i, tp_spec in enumerate(tp_config):
             target_type = tp_spec["target"]
             pct = tp_spec["pct"]
             pool = price_pools.get(target_type, [])
@@ -169,12 +178,9 @@ def calculate_tp_targets(
                 price = pool.pop(0)
                 targets.append({"price": price, "pct_of_position": pct, "reason": target_type})
             else:
-                if targets:
-                    last_price = targets[-1]["price"]
-                    extended = last_price * (1 - fallback_pct / 3)
-                else:
-                    extended = current_price * (1 - fallback_pct)
-                targets.append({"price": extended, "pct_of_position": pct, "reason": f"{target_type}_fallback"})
+                mult = fallback_multipliers[min(i, len(fallback_multipliers) - 1)]
+                extended = current_price - (sl_distance * mult)
+                targets.append({"price": extended, "pct_of_position": pct, "reason": f"{target_type}_fallback_{mult}x"})
 
     for t in targets:
         logger.info(f"TP target ({decision}): ${t['price']:.6f} ({t['pct_of_position']}%, {t['reason']})")
@@ -237,7 +243,7 @@ def calculate_risk_reward(
         }
     """
     sl_price = calculate_sl(decision, current_price, ict_summary)
-    tp_targets = calculate_tp_targets(decision, current_price, ict_summary)
+    tp_targets = calculate_tp_targets(decision, current_price, ict_summary, sl_price=sl_price)
     rr_ratio, rr_passes = check_rr_ratio(decision, current_price, sl_price, tp_targets)
 
     sl_pct = abs(current_price - sl_price) / current_price * 100
