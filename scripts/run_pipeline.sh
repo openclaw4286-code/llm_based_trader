@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 # =============================================================
-# 메인 파이프라인 - 6시간마다 cron에서 호출됩니다.
+# 메인 파이프라인 - launchd가 04:30/09:30/13:30/16:30/21:30에 호출합니다.
 #
 # 단계:
-#   1. step1: Gate.io에서 인기종목 + 5년치 캔들 다운로드
-#   2. step2: ICT 분석 + 차트 PNG 생성 + ICT 요약 JSON 저장
-#   3. step3 --manual: Claude Code용 master_prompt.txt 생성
-#   4. claude -p: Claude Code CLI 호출 → 분석 결과 텍스트
-#   5. parse_claude_response.py: 응답을 JSON으로 저장 + 포지션 사이징
-#   6. step4: Gate.io에 실제 주문
+#   1. step1_fetch_data.py     : CoinGecko 시총 상위 20종목 + 5년치 일봉 다운로드
+#   2. step2_ict_charts.py     : ICT 분석 + 차트 PNG 생성 + ICT 요약 JSON 저장
+#   3. step3_per_coin.py       : 종목별로 Claude 호출 → 파싱 → 포지션사이징 → 주문
+#                                (뉴스 RSS + 경제 캘린더 + 차트 이미지 모두 사용)
 #
 # 각 단계는 독립 실행 가능하며 멱등성을 갖습니다.
-# 한 단계가 실패해도 다음 단계가 별도로 실행 가능합니다.
 # =============================================================
 set -e  # 에러 발생 시 즉시 중단
 

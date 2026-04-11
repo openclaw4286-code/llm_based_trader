@@ -20,7 +20,7 @@ from typing import Optional
 
 import requests
 
-from src.logger import setup_logger
+from src.utils import setup_logger
 
 logger = setup_logger("economic_calendar")
 

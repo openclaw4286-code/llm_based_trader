@@ -15,8 +15,8 @@ from typing import Optional
 from pathlib import Path
 
 from src.gateio_client import GateIOClient
-from src.config_loader import get_config
-from src.file_manager import (
+from src.utils import get_config
+from src.utils import (
     get_session_id,
     load_all_analysis_for_session,
     get_processed_sessions,
@@ -30,7 +30,7 @@ from src.order_validator import (
     validate_balance,
 )
 from src.risk_reward import calculate_risk_reward
-from src.logger import setup_logger
+from src.utils import setup_logger
 
 logger = setup_logger("order_executor")
 
@@ -337,7 +337,7 @@ class OrderExecutor:
         # ICT 구조 기반 SL/TP 계산
         cfg = get_config()
         analysis_dir = Path(cfg["paths"]["analysis"])
-        from src.file_manager import get_session_id as _get_sid
+        from src.utils import get_session_id as _get_sid
         session_id = _get_sid()
         ict_path = analysis_dir / f"{session_id}_{symbol}_ict.json"
         ict_summary = {}

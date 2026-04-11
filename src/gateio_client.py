@@ -15,8 +15,7 @@ from typing import Optional
 
 import requests
 
-from src.config_loader import get_config
-from src.logger import setup_logger
+from src.utils import get_config, setup_logger
 
 logger = setup_logger("gateio")
 

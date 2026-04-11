@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 from typing import Optional
 
-from src.logger import setup_logger
+from src.utils import setup_logger
 
 logger = setup_logger("ict_analysis")
 

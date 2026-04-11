@@ -7,8 +7,7 @@ SL/TP를 Claude의 임의 퍼센트가 아닌 ICT 기술적 레벨에서 계산�
   - TP: Liquidity Pool, 미충전 FVG, 반대편 OB (멀티 타겟)
   - R:R 최소 3:1 미달 시 진입 거부
 """
-from src.config_loader import get_config
-from src.logger import setup_logger
+from src.utils import get_config, setup_logger
 
 logger = setup_logger("risk_reward")
 

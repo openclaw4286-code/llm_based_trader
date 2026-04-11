@@ -15,7 +15,7 @@ from __future__ import annotations
     모든 종목의 포지션 합이 max_total_exposure_pct를 넘지 않도록 조절하며,
     최소 min_cash_reserve_pct 이상의 현금을 항상 보유합니다.
 """
-from src.config_loader import get_config
+from src.utils import get_config
 
 
 def kelly_criterion(win_rate: float, win_loss_ratio: float) -> float:

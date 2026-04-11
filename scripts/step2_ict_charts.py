@@ -19,13 +19,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config_loader import get_config
+from src.utils import get_config
 from src.top_coins import load_top_coins
 from src.candle_fetcher import load_candles
 from src.ict_analysis import run_ict_analysis
 from src.ict_chart import generate_ict_chart
-from src.file_manager import get_session_id
-from src.logger import setup_logger
+from src.utils import get_session_id, setup_logger
 
 logger = setup_logger("step2")
 

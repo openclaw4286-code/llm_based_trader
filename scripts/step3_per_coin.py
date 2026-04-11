@@ -23,9 +23,9 @@ from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config_loader import get_config
+from src.utils import get_config
 from src.top_coins import load_top_coins
-from src.file_manager import (
+from src.utils import (
     get_session_id,
     save_analysis_json,
     load_all_analysis_for_session,
@@ -38,7 +38,7 @@ from src.economic_calendar import fetch_economic_events, format_events_for_promp
 from src.gateio_client import GateIOClient
 from src.order_executor import OrderExecutor
 from src.position_sizing import kelly_criterion
-from src.logger import setup_logger
+from src.utils import setup_logger
 
 logger = setup_logger("step3_per_coin")
 

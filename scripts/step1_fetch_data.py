@@ -18,10 +18,10 @@ from pathlib import Path
 # 프로젝트 루트를 모듈 경로에 추가
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config_loader import get_config
+from src.utils import get_config
 from src.top_coins import fetch_top_coins, save_top_coins
 from src.candle_fetcher import fetch_daily_candles, save_candles
-from src.logger import setup_logger
+from src.utils import setup_logger
 
 logger = setup_logger("step1")
 

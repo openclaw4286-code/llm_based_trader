@@ -12,8 +12,7 @@ from __future__ import annotations
 """
 from typing import Optional
 
-from src.config_loader import get_config
-from src.logger import setup_logger
+from src.utils import get_config, setup_logger
 
 logger = setup_logger("validator")
 

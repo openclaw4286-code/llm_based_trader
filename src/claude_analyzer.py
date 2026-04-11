@@ -9,10 +9,9 @@ import re
 import os
 from typing import Optional
 
-from src.config_loader import get_config
+from src.utils import get_config
 from src.prompts import SYSTEM_PROMPT, build_full_analysis_prompt
-from src.file_manager import save_analysis_json, get_session_id
-from src.logger import setup_logger
+from src.utils import get_session_id, save_analysis_json, setup_logger
 
 logger = setup_logger("claude_analyzer")
 

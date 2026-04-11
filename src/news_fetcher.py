@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from src.logger import setup_logger
+from src.utils import setup_logger
 
 logger = setup_logger("news_fetcher")
 

@@ -15,8 +15,7 @@ from pathlib import Path
 import pandas as pd
 
 from src.gateio_client import GateIOClient
-from src.config_loader import get_config
-from src.logger import setup_logger
+from src.utils import get_config, setup_logger
 
 logger = setup_logger("candle_fetcher")
 

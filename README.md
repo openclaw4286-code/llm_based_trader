@@ -1,389 +1,460 @@
 # LLM-Based Crypto Trading Agent
 
-Gate.io 선물 자동매매 에이전트. ICT 차트 기반 기술적 분석 + Claude Code(Opus 4.6)의 거시적/정량적 분석으로 6시간마다 롱/숏/스킵을 결정합니다.
+Gate.io USDT 무기한 선물 자동매매 에이전트.
+
+매 세션마다:
+1. CoinGecko 시가총액 상위 + 상품 선물(금/은) 20개 선정
+2. 각 종목을 Claude Code CLI(Opus 4.6)로 분석 — ICT 차트 이미지 + 뉴스 + 경제 캘린더 참고
+3. ICT 구조 기반 SL/TP 자동 계산 (멀티 TP)
+4. Kelly Criterion + 동적 레버리지로 즉시 주문
+
+로컬 Mac에서 `launchd`가 **매일 5회** (04:30, 09:30, 13:30, 16:30, 21:30 KST, ICT Kill Zone 기반) 전체 파이프라인을 자동 실행합니다.
 
 ---
 
 ## 파이프라인 전체 흐름
 
-6시간마다 (04, 10, 16, 22시 KST) 아래 6단계가 **순차 실행**됩니다.
-
 ```
-[step1] Gate.io API → 시총 기준 상위 20종목 선정 + 5년치 일봉 다운로드
-   ↓
-[step2] 각 종목 ICT 분석 (BOS/CHoCH, OB, FVG, Liquidity, Premium/Discount, OTE)
-        → 차트 PNG 저장 + ICT 요약 JSON 저장
-   ↓
-[step3] 이전 세션의 분석 JSON 정리 → 20종목 전부 Claude 프롬프트 생성
-   ↓
-[step4] Claude Code CLI (Opus 4.6) 호출
-        → 각 종목에 대해 기술적/거시적 점수 + 롱/숏/스킵 결정
-   ↓
-[step5] Claude 응답 파싱 → 종목별 분석 JSON 저장
-        → Kelly Criterion으로 각 종목 포지션 비율(%) 계산
-   ↓
-[step6] Gate.io 선물 주문 실행 (진입/유지/청산/반전)
-        → 진입 시 SL/TP 트리거 주문 동시 설정
+[step1] CoinGecko 시총 상위 18개 + 금/은 2개 = 20종목 선정
+        Gate.io에서 각 종목의 5년치 일봉 다운로드
+           ↓
+[step2] 각 종목 ICT 분석 → charts/{symbol}.png + data/analysis/{symbol}_ict.json
+           ↓
+[step3] 종목별 순차 처리 (20회 반복):
+          ┌─ 프롬프트 생성 (ICT 요약 + 뉴스 + 경제 캘린더 + 차트 경로)
+          ├─ Claude Code CLI 1회 호출
+          ├─ 응답 파싱 → 종목 분석 JSON 저장
+          ├─ Kelly Criterion 포지션 사이징
+          ├─ 동적 레버리지 계산
+          ├─ ICT 기반 SL/TP 계산 (R:R 검증)
+          └─ Gate.io 주문 실행 (진입/유지/청산/반전)
 ```
 
-각 단계는 **독립 실행 가능 + 멱등**입니다. 중간에 실패해도 재실행하면 이어서 진행됩니다.
+각 단계는 **독립 실행 + 멱등**입니다. 중간에 실패해도 재실행 가능.
 
 ---
 
-## 종목 선정 (step1)
+## 1. 종목 선정 — `src/top_coins.py`
 
-- Gate.io USDT 선물 전체 종목에서 **시가총액 proxy** 기준 상위 20개 선정
-- 시총 proxy = `mark_price × volume_24h_base` (Gate.io가 시총을 직접 안 줘서 대용)
-- BTC, ETH 같은 대형 코인 + XAU(금), XAG(은) 같은 상품 선물도 포함
-- 스테이블코인 (USDC, DAI 등), 래핑 토큰 (WBTC, WETH 등)은 제외
-- 매 세션마다 **실시간으로 새로 선정** (고정 아님)
+1. **CoinGecko API**에서 시가총액 상위 100개 크립토 조회 (순환공급 × 가격 = 진짜 시총)
+2. Gate.io USDT 선물에 존재하는 종목만 필터
+3. 스테이블코인(USDC, DAI 등)과 래핑 토큰(WBTC 등) 제외
+4. **상품 선물**(`XAU_USDT` 금, `XAG_USDT` 은)은 항상 포함
+5. 최종: 크립토 18개 + 상품 2개 = 20개
+
+CoinGecko API 장애 시 거래량 기준 폴백.
 
 ---
 
-## 점수 체계 (step4 — Claude 분석)
+## 2. ICT 분석 + 차트 — `src/ict_analysis.py`, `src/ict_chart.py`
 
-**모든 20종목을 매 세션마다 풀 분석합니다** (보유 중인 종목 포함).
+각 종목의 5년치 일봉으로:
 
-Claude에게 각 종목마다 2가지 점수를 요청:
+- **Market Structure**: BOS (Break of Structure) / CHoCH (Change of Character)
+- **Order Blocks** (OB): Bullish / Bearish, 미티게이션 여부
+- **Fair Value Gaps** (FVG): 충전 여부
+- **Liquidity Levels**: Buy/Sell-side, 스윕 여부
+- **Premium/Discount Zone**: 최근 50일 스윙 범위 기준 피보나치
+- **OTE Zone**: 0.618~0.786 리트레이스먼트
 
-| 점수 | 범위 | 기준 |
-|---|---|---|
-| **기술적 분석** | -25 ~ +25 | ICT 차트: BOS/CHoCH, Order Block, FVG, Liquidity, Premium/Discount, OTE |
-| **거시적/정량적** | -25 ~ +25 | 뉴스 센티먼트, SNS, 토크노믹스, 온체인 데이터, 시장 전반 |
+결과:
+- `charts/{symbol}.png` — 다크 테마 캔들스틱 + ICT 오버레이 (최근 120일 표시)
+- `data/analysis/{symbol}_ict.json` — 텍스트 요약 (OB/FVG 리스트, 현재가 위치 등)
 
-### 결정 로직
+> 파일명에 세션 ID 없음 — **매 세션마다 덮어씀**. Claude가 항상 최신 파일 하나만 읽습니다.
 
+---
+
+## 3. Claude 분석 — `scripts/step3_per_coin.py`
+
+### 세션당 20회 Claude CLI 호출
+
+종목 하나당 개별 프롬프트를 만들어 `claude --print --model claude-opus-4-6`으로 stdin 파이프 호출.
+
+### 프롬프트에 포함되는 것 (4가지)
+
+1. **ICT 차트 이미지 경로** — Claude가 `Read` 도구로 직접 이미지 시각 분석
+2. **ICT 요약 텍스트** — 숫자로 정확한 OB/FVG/Liquidity 좌표
+3. **최근 24시간 뉴스** — `src/news_fetcher.py`가 5개 RSS 피드(CoinDesk, Cointelegraph, Decrypt, Bitcoin Magazine, CryptoNews)에서 수집, 종목 키워드 매칭
+4. **경제 캘린더** — `src/economic_calendar.py`가 Forex Factory 미러(`faireconomy.media`)에서 고임팩트 이벤트(FOMC/CPI/NFP/GDP/ECB) 수집, 지난 24시간 발표 결과 + 앞으로 72시간 예정
+
+### Claude의 출력 (-10 ~ +10)
+
+```json
+{
+  "technical_score": <int -10 to 10>,
+  "technical_reasoning": "...",
+  "macro_quant_score": <int -10 to 10>,
+  "macro_quant_reasoning": "...",
+  "total_score": <int>,
+  "decision": "long" | "short" | "skip",
+  "confidence": <float 0.0 to 1.0>
+}
 ```
-total_score = 기술적 + 거시적
 
-if total_score >= +10:
-    decision = "long"          # 롱 진입
-elif total_score <= -10:
-    decision = "short"         # 숏 진입
+`decision`은 참고용이고 **최종 결정은 Python이 config threshold로 판단**합니다.
+
+---
+
+## 4. 진입 판단 — `src/claude_analyzer.py:_normalize_result`
+
+```python
+total_score = technical_score + macro_quant_score   # 범위: -20 ~ +20
+
+if total_score >= config.trading.long_threshold:
+    decision = "long"
+elif total_score <= config.trading.short_threshold:
+    decision = "short"
 else:
-    decision = "skip"          # 애매하면 패스
+    decision = "skip"
 ```
+
+기본값: `long_threshold=3`, `short_threshold=-8` (숏은 더 보수적).
 
 ---
 
-## 포지션 사이징 (step5)
+## 5. 포지션 사이징 — `scripts/step3_per_coin.py:compute_position_pct`
 
-**Kelly Criterion (보수적 fractional Kelly)** 기반:
+**Kelly Criterion** 기반:
 
 ```
-Kelly 공식: f* = (bp - q) / b
-  b = 수익/손실 비율 (1.0 ~ 2.5, total_score에서 산출)
-  p = 승률 (0.35 ~ 0.65, confidence에서 산출)
-  q = 1 - p
-
-적용 비율 = f* × kelly_fraction (기본 0.25 = 풀 켈리의 25%)
+win_rate = 0.5 + (confidence - 0.5) * 0.3          # 0.35 ~ 0.65
+win_loss_ratio = 1.0 + abs(total_score) / 20 * 1.5 # 1.0 ~ 2.5
+f* = (win_rate * win_loss_ratio - (1 - win_rate)) / win_loss_ratio
+position_pct = f* * kelly_fraction * 100           # kelly_fraction=1.0 (현재)
+position_pct = clamp(position_pct, min_position_pct, max_position_pct)
 ```
 
-### 제약 조건
+### 전체 노출 한도
 
-| 파라미터 | 기본값 | 의미 |
+각 종목 진입마다 `running_exposure`를 누적 추적. `max_total_exposure_pct` (기본 60%) 초과 시 나머지 여유분만 배정하거나 스킵.
+
+---
+
+## 6. 동적 레버리지 — `src/order_executor.py:compute_dynamic_leverage`
+
+점수 절대값에 따라 **선형 보간**으로 레버리지 자동 결정.
+
+현재 `config.yaml` 설정 기준:
+
+| 방향 | 점수 | 레버리지 |
 |---|---|---|
-| `kelly_fraction` | 0.25 | 보수적 Kelly 비율 |
-| `max_position_pct` | 5.0% | 단일 종목 최대 잔고 비율 |
-| `min_position_pct` | 0.5% | 단일 종목 최소 잔고 비율 |
-| `min_cash_reserve_pct` | 30.0% | 최소 현금 보유 |
-| `max_total_exposure_pct` | 60.0% | 전체 노출 한도 |
+| long | +3 (임계값) | 5x |
+| long | +10 | 7.1x |
+| long | +20 (최대) | 10x |
+| short | -8 (임계값) | 1x |
+| short | -14 | 3x |
+| short | -20 (최대) | 5x |
 
-모든 종목의 포지션 합이 `max_total_exposure_pct`를 넘으면 **비례 축소**. 최소 `min_cash_reserve_pct` 이상 현금 항상 보유.
+**숏은 최소값이 작은 이유**: 크립토는 상승 급등 위험이 커서 보수적으로.
 
----
-
-## 한 종목의 전체 처리 흐름
-
-### Phase 1: 분석 (step3 + step4)
-
-**모든 종목을 매번 풀 분석합니다.** 보유 중인 종목도 분석합니다.
-→ Claude가 "이제 나가야 해 (skip)" 또는 "방향 전환해야 해 (반전)" 판단 가능.
-
-```
-step3: 20종목 전부 프롬프트 생성 (예외 없음)
-step4: Claude가 각 종목 분석 → decision = long / short / skip
-```
-
-### Phase 2: 주문 실행 (step6)
-
-step6는 **분석된 종목 + 기존 포지션 보유 종목** 모두를 순회합니다.
-
-```
-┌─────────────────────────────────────────────────────────┐
-│ 입력: analysis (Claude 분석 결과 또는 None)                 │
-│       existing (Gate.io 현재 포지션 또는 None)              │
-└─────────────────────────────────────────────────────────┘
-                        │
-                        ▼
-               분석 결과 있는가?
-              ┌────┴────┐
-             NO         YES
-              │          │
-              ▼          ▼
-        포지션 있는가?   decision 은?
-        ┌──┴──┐       ┌────┬────────┐
-       NO    YES    skip  같은방향   반대방향/신규
-        │     │      │      │          │
-        ▼     ▼      ▼      ▼          ▼
-     [정리]  [유지] 포지션?  [유지]    아래 진입
-     미체결   HOLD  ┌┴┐    HOLD     프로세스로
-     주문만        NO YES
-                    │  │
-                 [정리] [청산]
-                 미체결  Claude가
-                 주문만  skip 판단
-```
-
-### 경우의 수 상세 (7가지)
-
-| # | 분석 | 기존 포지션 | decision | 동작 | 설명 |
-|---|---|---|---|---|---|
-| 1 | 없음 | 없음 | - | **미체결 주문 정리** | 완전 무관한 종목 |
-| 2 | 없음 | LONG 보유 | - | **HOLD** | top20 밖이지만 포지션 있음 → 유지 |
-| 3 | 있음 | 없음 | skip | **미체결 주문 정리** | Claude가 skip → 아무것도 안 함 |
-| 4 | 있음 | LONG 보유 | skip | **청산** | Claude가 더 이상 추천 안 함 → 포지션 종료 |
-| 5 | 있음 | LONG 보유 | long | **HOLD** | 같은 방향 → 유지 (불필요한 거래 방지) |
-| 6 | 있음 | LONG 보유 | short | **청산 → 숏 진입** | 반대 방향 → 기존 닫고 새로 잡기 |
-| 7 | 있음 | 없음 | long/short | **신규 진입** | 새 포지션 열기 |
-
-> 위 표에서 SHORT 보유 케이스도 동일하게 대칭 적용됩니다.
-
-### 핵심 원칙
-
-1. **모든 종목 매번 분석** — 보유 중이어도 분석해서 청산/반전 판단
-2. **`decision="skip"` (Claude 판단)일 때 기존 포지션 청산** — 의도적 퇴장
-3. **같은 방향 포지션은 HOLD** — 매 세션마다 포지션 열고 닫는 비용 방지
-4. **top20 밖이지만 포지션 보유 중 (분석 없음)** → 유지 (SL/TP로 관리)
+범위 밖 점수는 경계값으로 클램핑.
 
 ---
 
-## 신규 진입 프로세스 (위 표의 #6, #7)
+## 7. SL/TP 계산 — `src/risk_reward.py`
 
-신규 포지션을 열 때 아래 단계를 순서대로 거칩니다. **어느 하나라도 실패하면 주문 안 나감**.
+**Claude가 SL/TP를 정하지 않습니다.** 대신 ICT 실제 구조에서 계산 → 고빈도 트레이딩용 타이트 제약 적용.
 
-```
-1. 미체결 좀비 주문 정리 (이전 세션의 잔여 주문)
-2. 반대 포지션 있으면 먼저 청산 (#6의 경우)
-3. 분석 JSON 무결성 검증 (validate_analysis)
-   - 점수 ↔ decision 일치하는가
-   - position_pct가 0% 초과, max% 이하인가
-   - SL 거리: 0.5% ~ 30%
-   - TP 거리: 0.5% ~ 100%
-   - R:R 비율: TP >= SL × 0.8
-4. 계약 정보 조회 (Gate.io: quanto_multiplier, order_price_round, order_size_min)
-5. 현재 시장가 조회 (Gate.io ticker)
-6. 슬리피지 검증: |분석 시점 가격 - 현재 가격| > 3% → 거부
-7. 포지션 금액 계산: balance × position_pct%
-8. 계약 수량 계산: (금액 × 레버리지) / (가격 × quanto_multiplier) → 정수
-   - 수량 < min_size → "잔고 부족" 스킵
-9. SL/TP 가격 계산 + tick size 반올림 (Decimal 정밀도)
-   - 롱 SL → ROUND_DOWN (아래로, 더 안전)
-   - 롱 TP → ROUND_UP (위로, 더 보수적)
-   - 숏은 반대
-10. SL/TP 방향 검증 (validate_order_prices)
-    - 롱: SL < 진입가 < TP 인가?
-    - 숏: TP < 진입가 < SL 인가?
-    - 위반 시 → 거부 (LLM 실수 차단)
-11. 잔고 충분성 검증
-12. Gate.io에 레버리지 설정
-13. 시장가(IOC) 주문 실행
-14. SL 트리거 주문 설정 (Gate.io price_orders)
-15. TP 트리거 주문 설정 (Gate.io price_orders)
-16. 주문 결과 JSON 저장
-```
+### SL 결정 (`calculate_sl`)
 
----
+1. **롱**: 현재가 아래에서 가장 가까운 [Bullish OB 하단 / Swing Low] 탐색
+2. **숏**: 현재가 위에서 가장 가까운 [Bearish OB 상단 / Swing High] 탐색
+3. **거리 필터**: 현재가 ± `max_level_distance_pct` (기본 3.5%) 이내 레벨만 후보
+4. **버퍼**: 찾은 레벨에서 `sl_buffer_pct` (기본 0.1%) 여유
+5. **폴백**: 후보 없으면 `sl_fallback_pct` (기본 1.5%)
+6. **최대 클램핑**: SL이 `max_sl_pct` (기본 2.0%) 초과 시 강제 잘림
 
-## SL/TP 트리거 주문
+### TP 결정 (`calculate_tp_targets`) — 멀티 타겟
 
-진입과 동시에 Gate.io의 **price triggered order** API로 SL/TP를 설정합니다:
+포지션을 **50% / 30% / 20%**로 분할 청산:
 
-```
-SL 트리거:
-  - 조건: 가격이 SL 가격에 도달하면
-  - 실행: 시장가(IOC)로 reduce-only 주문 (포지션 전량 청산)
-  - 롱일 때: 가격 <= SL (현재가가 SL 이하로 떨어지면)
-  - 숏일 때: 가격 >= SL (현재가가 SL 이상으로 올라가면)
-
-TP 트리거:
-  - 동일 구조, 반대 방향
-```
-
-가격은 **tick size(`order_price_round`)의 배수**로 반올림되어 전송됩니다.
-tick에 안 맞으면 Gate.io가 `AUTO_INVALID_PARAM_TRIGGER_PRICE`로 거부합니다.
-
----
-
-## 세션 관리 + 중복 방지
-
-- 세션 ID = `YYYYMMDD_HH` (가장 가까운 이전 스케줄 시각)
-  - 예: 05:30 → `20260410_04`, 15:00 → `20260410_10`
-  - 22:00~03:59 → 전날 `_22` 세션
-- 주문 실행 후 `data/orders/processed_sessions.json`에 세션 ID 기록
-- 같은 세션 ID로 재실행 시 자동 스킵 (중복 주문 방지)
-- **dry-run은 마킹 안 함** (재실행 가능)
-- 수동 재실행 필요하면: `rm -f data/orders/processed_sessions.json`
-
----
-
-## 안전 장치 요약
-
-| 검증 | 시점 | 차단 대상 |
+| 단계 | 포지션 비율 | 타겟 타입 |
 |---|---|---|
-| `validate_analysis` | 주문 전 | 점수↔decision 불일치, 비정상 SL/TP 거리, 불리한 R:R |
-| `validate_order_prices` | 주문 전 | 롱인데 SL≥진입 / TP≤진입 (즉시 손실) |
-| `validate_slippage` | 주문 전 | 분석 시점 ↔ 현재 가격 차 > 3% |
-| `validate_balance` | 주문 전 | 마진 부족 |
-| Tick size 반올림 | 주문 전 | Gate.io의 가격 단위 불일치 거부 |
-| 세션 중복 체크 | 실행 시 | 같은 세션 이중 주문 |
-| 좀비 주문 정리 | 매 종목 | 이전 세션의 잔여 미체결/트리거 주문 |
+| TP1 | 50% | 가장 가까운 Liquidity Pool |
+| TP2 | 30% | 가장 가까운 미충전 FVG |
+| TP3 | 20% | 가장 가까운 반대편 OB |
+
+모두 `max_level_distance_pct` 이내 + `max_tp_pct` (기본 6.0%) 상한.
+
+### 폴백 (레벨 없을 때)
+
+```
+TP1 = 현재가 ± (SL 거리 × min_rr_ratio)        # 예: 2.5x
+TP2 = 현재가 ± (SL 거리 × (min_rr_ratio + 0.3))
+TP3 = 현재가 ± (SL 거리 × (min_rr_ratio + 0.6))
+```
+
+→ **R:R 자동 보장**.
+
+### R:R 검증 (`check_rr_ratio`)
+
+`TP1 거리 / SL 거리 >= min_rr_ratio` (기본 **2.5:1**).
+미달 시 **진입 거부** (`rr_rejected`).
 
 ---
 
-## 설치
+## 8. 한 종목 처리 — `src/order_executor.py:_process_single_coin`
 
-### 1. 프로젝트 다운로드
+모든 경우의 수:
+
+| 기존 포지션 | Claude 결정 | 동작 |
+|---|---|---|
+| 없음 | skip | **미체결 주문 정리**만 |
+| 없음 | long/short | 미체결 정리 → 검증 → **신규 진입** |
+| 같은 방향 | 같은 방향 | **HOLD** (불필요한 재거래 방지) |
+| 반대 방향 | 반대 방향 | 미체결 정리 → 기존 **청산** → 신규 **반전 진입** |
+| 있음 | skip | 미체결 정리 → **청산** |
+| 있음 | 분석 실패 | **HOLD** (안전) |
+
+### 신규 진입 프로세스 (검증 11단계)
+
+```
+1. 분석 JSON 무결성 검증 (점수↔decision 일치, position_pct 한도)
+2. 계약 정보 조회 (Gate.io: quanto_multiplier, order_price_round, order_size_min)
+3. 현재 시장가 조회
+4. 슬리피지 검증: |분석 시점 가격 - 현재가| > 3% → 거부
+5. 포지션 금액 계산: balance × position_pct%
+6. 계약 수량 계산: (금액 × 레버리지) / (가격 × quanto_multiplier) → 정수
+   - 수량 < min_size → 잔고 부족으로 스킵
+7. ICT 기반 SL/TP 계산 (tick size 반올림, Decimal 정밀도)
+8. R:R 검증 (≥ min_rr_ratio)
+9. SL/TP 방향 검증 (롱: SL<진입<TP, 숏: 반대)
+10. 잔고 충분성 검증
+11. 좀비 미체결 주문 정리
+   ↓
+Gate.io 레버리지 설정 → 시장가 IOC 주문 → SL 트리거 → 멀티 TP 트리거
+```
+
+---
+
+## 9. 실행 스케줄 — `scripts/install_launchd.sh`
+
+macOS **launchd**로 매일 5회 자동 실행 (사용자 로그인 세션, Keychain 접근 가능):
+
+| KST | ICT Kill Zone |
+|---|---|
+| 04:30 | NY Lunch End (NY 오후 세션 재개) |
+| 09:30 | Asian Open |
+| 13:30 | Asian Lunch End (도쿄 점심 후 재개) |
+| 16:30 | London Open |
+| 21:30 | NY Open + London Lunch End |
+
+> cron도 가능(`install_cron.sh` 파일은 제거됨)하지만 macOS cron은 Keychain 접근 불가 → `claude` 인증 실패. **반드시 launchd 사용**.
+
+---
+
+## 10. 설정 — `config.yaml`
+
+```yaml
+trading:
+  top_n_coins: 20                  # 분석 종목 수
+  long_threshold: 3                # total_score >= 3 → 롱
+  short_threshold: -8              # total_score <= -8 → 숏
+  leverage: 5                      # 폴백 (동적 레버리지 비활성 시)
+  margin_mode: isolated
+  dynamic_leverage:
+    enabled: true
+    long:
+      min_score: 3                 # +3 → leverage 5
+      max_score: 20                # +20 → leverage 10
+      min_leverage: 5
+      max_leverage: 10
+    short:
+      min_score: -8                # -8 → leverage 1
+      max_score: -20               # -20 → leverage 5
+      min_leverage: 1
+      max_leverage: 5
+
+position_sizing:
+  kelly_fraction: 1.0              # 풀 켈리 (1.0). 보수적으로 0.25도 가능
+  max_position_pct: 5.0            # 단일 종목 최대 잔고 5%
+  min_position_pct: 0.5
+  min_cash_reserve_pct: 30.0       # 최소 현금 30% 보유
+  max_total_exposure_pct: 60.0     # 전체 노출 한도 60%
+
+scoring:
+  technical_min: -10
+  technical_max: 10
+  macro_quant_min: -10
+  macro_quant_max: 10
+
+risk_reward:
+  min_rr_ratio: 2.5                # 최소 R:R 2.5:1
+  sl_buffer_pct: 0.1               # OB/Swing에서 추가 버퍼
+  max_level_distance_pct: 3.5      # ICT 레벨 거리 필터 (3.5% 이내만)
+  max_sl_pct: 2.0                  # SL 최대 거리 클램핑
+  max_tp_pct: 6.0                  # TP 최대 거리 클램핑
+  sl_fallback_pct: 1.5             # 레벨 없을 때 SL 폴백
+  tp_fallback_pct: 4.0             # 레벨 없을 때 TP 폴백
+  tp_targets:
+    - {pct: 50, target: liquidity}
+    - {pct: 30, target: fvg}
+    - {pct: 20, target: opposite_ob}
+
+schedule:
+  timezone: Asia/Seoul
+  run_hours: [4, 9, 13, 16, 21]
+  run_minute: 30
+```
+
+---
+
+## 파일 구조
+
+```
+llm_based_trader/
+├── config.yaml                # 모든 트레이딩 설정
+├── .env                       # API 키 (gitignore)
+├── requirements.txt
+├── README.md
+│
+├── src/                       # 핵심 모듈
+│   ├── utils.py               # config 로더 + 로거 + 세션/파일 관리 (통합)
+│   ├── gateio_client.py       # Gate.io API v4 클라이언트
+│   ├── top_coins.py           # CoinGecko 시총 + 상품 선물 선정
+│   ├── candle_fetcher.py      # 5년치 일봉 다운로드
+│   ├── ict_analysis.py        # ICT 분석 엔진 (교체 가능)
+│   ├── ict_chart.py           # 차트 시각화 (교체 가능)
+│   ├── news_fetcher.py        # RSS 뉴스 수집
+│   ├── economic_calendar.py   # Forex Factory 경제 캘린더
+│   ├── prompts.py             # Claude 프롬프트 템플릿
+│   ├── claude_analyzer.py     # Claude 응답 파싱/정규화
+│   ├── risk_reward.py         # ICT 기반 SL/TP 계산
+│   ├── position_sizing.py     # Kelly Criterion
+│   ├── order_validator.py     # 주문 전 검증 (슬리피지/방향/잔고)
+│   └── order_executor.py      # 주문 실행 + 포지션 관리 + 동적 레버리지
+│
+├── scripts/                   # 진입점
+│   ├── run_pipeline.sh        # launchd가 호출하는 메인 셸
+│   ├── step1_fetch_data.py    # 종목 선정 + 캔들 다운로드
+│   ├── step2_ict_charts.py    # ICT 분석 + 차트 생성
+│   ├── step3_per_coin.py      # 종목별 Claude 분석 + 즉시 주문
+│   ├── step4_execute_orders.py # 수동 주문/상태/비상청산 유틸
+│   ├── install_launchd.sh     # macOS 자동화 설치
+│   ├── setup_keys.sh          # API 키 대화식 입력
+│   └── show_state.py          # Gate.io 상태 조회
+│
+├── data/
+│   ├── candles/               # 5년치 일봉 CSV
+│   ├── analysis/              # ICT JSON + Claude 분석 JSON
+│   │   └── prompts/           # 프롬프트 + 응답 파일 (디버그용)
+│   └── orders/                # 세션별 주문 기록 + processed_sessions.json
+├── charts/                    # ICT 차트 PNG (심볼당 1개, 덮어씀)
+└── logs/                      # 실행 로그
+```
+
+---
+
+## 설치 및 실행
+
+### 1. 저장소 클론 + Python 환경
 
 ```bash
-git clone <repo-url> ~/llm_based_trader
-cd ~/llm_based_trader
-```
-
-### 2. Python 가상환경 + 의존성
-
-```bash
+cd ~
+git clone <repo-url> llm_based_trader
+cd llm_based_trader
 python3 -m venv venv
 source venv/bin/activate
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 3. API 키 설정
+### 2. Gate.io API 키
 
 ```bash
 bash scripts/setup_keys.sh
 ```
 
-> Gate.io API 키 만들기: Gate.io → 계정 → API 관리 → 새 키 → **Perpetual Futures 거래 권한** 필수
+> Gate.io → 계정 → API 관리 → **Perpetual Futures Read + Trade 권한** 필수
 
-### 4. Claude Code CLI
+### 3. Claude Code CLI
 
-**Claude Code CLI**를 로컬에서 호출합니다 (Max 요금제).
-설치 후 `claude --version`으로 확인, 한 번 로그인 필요.
+로컬에 설치 + 로그인 (`claude` 명령이 `/opt/homebrew/bin/claude`에 있어야 함). 이 프로젝트는 Claude Max 구독 기반으로 CLI subprocess를 호출합니다.
 
-### 5. 설정 조정
-
-`config.yaml`:
-
-```yaml
-trading:
-  top_n_coins: 20            # 시총 상위 종목 수
-  long_threshold: 10         # 롱 진입 임계 점수
-  short_threshold: -10
-  leverage: 5
-position_sizing:
-  kelly_fraction: 0.25       # 보수적 Kelly (0.25배)
-  max_position_pct: 5.0      # 단일 종목 최대 5%
-  min_cash_reserve_pct: 30.0 # 최소 현금 30% 보유
-  max_total_exposure_pct: 60.0
-```
-
-## 실행
-
-### 수동 실행 (테스트)
+### 4. 테스트 실행 (수동)
 
 ```bash
-bash scripts/run_pipeline.sh       # 전체 파이프라인 1회
+source venv/bin/activate
+bash scripts/run_pipeline.sh
 ```
 
-같은 세션 재실행 시:
+5~15분 소요 (20종목 순차 처리). 각 종목마다 Claude 호출 → 주문.
+
+### 5. 자동화 설치
 
 ```bash
+bash scripts/install_launchd.sh
+bash scripts/install_launchd.sh status  # 확인
+```
+
+이제 04:30, 09:30, 13:30, 16:30, 21:30 KST에 자동 실행됩니다.
+
+> **Mac 슬립 방지 필수**: 시스템 설정 → 배터리 → "전원 어댑터 연결 시 자동 잠자기 방지" 체크. 또는 `caffeinate -d -i -s &`.
+
+### 6. 자동화 제거
+
+```bash
+bash scripts/install_launchd.sh remove
+```
+
+---
+
+## 유틸리티 명령어
+
+```bash
+# Gate.io 현재 상태 (잔고, 포지션, 미체결, SL/TP 트리거)
+python scripts/show_state.py
+
+# 현재 세션 분석/포지션 요약
+python scripts/step4_execute_orders.py --status
+
+# 주문 없이 시뮬레이션
+python scripts/step4_execute_orders.py --dry-run
+
+# 비상: 모든 포지션 청산 + 미체결/트리거 전량 취소
+python scripts/step4_execute_orders.py --close-all
+
+# 같은 세션 수동 재실행 (중복 방지 해제)
 rm -f data/orders/processed_sessions.json
 bash scripts/run_pipeline.sh
 ```
 
-### 자동 실행 (macOS launchd — 권장)
+---
 
-```bash
-bash scripts/install_launchd.sh
-```
+## 안전장치 요약
 
-launchd는 macOS 기본 스케줄러로, cron과 달리 **Keychain 접근 가능** (Claude CLI 인증 작동).
-04시, 10시, 16시, 22시에 자동 실행됩니다.
+| 검증 | 위치 | 차단 대상 |
+|---|---|---|
+| **점수 일관성** | `order_validator.validate_analysis` | 점수 ↔ decision 불일치, position_pct 한도 |
+| **SL/TP 방향** | `order_validator.validate_order_prices` | 롱 SL≥진입 / TP≤진입 같은 LLM 실수 |
+| **슬리피지** | `order_validator.validate_slippage` | 분석↔실행 가격차 > 3% |
+| **잔고** | `order_validator.validate_balance` | 마진 부족 |
+| **R:R 최소** | `risk_reward.check_rr_ratio` | TP1/SL < min_rr_ratio (2.5:1) |
+| **Tick size 정렬** | `order_executor._round_to_tick` | Gate.io `order_price_round` 배수로 Decimal 반올림 |
+| **수량 최소** | `order_executor` | 계산된 수량 < `order_size_min` 이면 스킵 |
+| **세션 중복** | `utils.get_processed_sessions` | 같은 세션 이중 주문 방지 |
+| **좀비 주문 정리** | `order_executor._cleanup_pending_orders` | 이전 세션의 미체결/트리거 자동 취소 |
+| **노출 한도 추적** | `step3_per_coin` running_exposure | `max_total_exposure_pct` 초과 방지 |
 
-```bash
-bash scripts/install_launchd.sh status  # 상태 확인
-bash scripts/install_launchd.sh remove  # 제거
-tail -f logs/launchd_stdout.log         # 로그
-```
-
-## 유틸리티
-
-```bash
-python scripts/show_state.py                    # Gate.io 잔고/포지션/트리거 조회
-python scripts/test_orders.py                   # 시뮬레이션 (주문 안 나감)
-python scripts/step4_execute_orders.py --status  # 세션/분석 요약
-python scripts/step4_execute_orders.py --dry-run # dry-run
-```
-
-## 비상 종료
-
-```bash
-python scripts/step4_execute_orders.py --close-all
-```
-
-## 디렉토리 구조
-
-```
-llm_based_trader/
-├── config.yaml             # 트레이딩 설정
-├── .env                    # API 키 (gitignore)
-├── src/
-│   ├── gateio_client.py    # Gate.io API v4 클라이언트
-│   ├── ict_analysis.py     # ICT 분석 엔진
-│   ├── ict_chart.py        # 차트 시각화 (교체 가능)
-│   ├── claude_analyzer.py  # Claude 응답 파싱 + 정규화
-│   ├── order_executor.py   # 주문 실행 + 포지션 관리
-│   ├── order_validator.py  # 주문 전 검증 (SL/TP/슬리피지/잔고)
-│   ├── position_sizing.py  # Kelly Criterion 포지션 사이징
-│   ├── prompts.py          # Claude 프롬프트 템플릿
-│   ├── file_manager.py     # 세션 ID, JSON 읽기/쓰기, 중복 방지
-│   ├── config_loader.py    # config.yaml + .env 로더
-│   ├── top_coins.py        # 시총 기준 상위 N종목 선별
-│   ├── candle_fetcher.py   # 5년치 일봉 다운로드
-│   └── logger.py           # 콘솔 + 파일 로깅
-├── scripts/
-│   ├── run_pipeline.sh     # 전체 파이프라인 자동화
-│   ├── step1_fetch_data.py
-│   ├── step2_ict_charts.py
-│   ├── step3_claude_analysis.py
-│   ├── step4_execute_orders.py
-│   ├── parse_claude_response.py
-│   ├── show_state.py       # Gate.io 상태 조회
-│   ├── test_orders.py      # 시뮬레이션
-│   ├── install_launchd.sh  # macOS 자동화 (권장)
-│   ├── install_cron.sh     # cron 자동화 (레거시)
-│   ├── setup_keys.sh       # API 키 대화식 입력
-│   └── debug_gateio.py     # API 연결 디버그
-├── data/
-│   ├── candles/            # 5년치 일봉 CSV
-│   ├── analysis/           # 세션별 ICT/분석 JSON
-│   │   └── prompts/        # Claude 프롬프트/응답
-│   └── orders/             # 주문 기록 + processed_sessions.json
-├── charts/                 # ICT 차트 PNG
-└── logs/                   # 실행 로그
-```
+---
 
 ## ICT 차트 모듈 교체
 
-`src/ict_chart.py`만 바꾸면 됩니다. 인터페이스:
+나중에 직접 만든 ICT 엔진/차트로 교체 시 `src/ict_analysis.py`와 `src/ict_chart.py`만 바꾸면 됩니다. 인터페이스 유지:
 
 ```python
+# ict_analysis.py
+def run_ict_analysis(df: pd.DataFrame, symbol: str) -> dict:
+    """OHLCV DataFrame → 분석 결과 딕셔너리"""
+
+# ict_chart.py
 def generate_ict_chart(df, ict_result, symbol, output_path=None) -> Path:
-    ...
+    """차트 PNG 저장, Path 반환"""
 ```
+
+---
 
 ## 면책
 
-이 프로젝트는 학습/연구 목적입니다. 실제 자금 사용 시 발생하는 손실은 사용자 책임입니다. 반드시 작은 금액으로 충분히 테스트한 후 사용하세요.
+학습/연구 목적입니다. 실거래 손실은 사용자 책임. 반드시 소액으로 충분히 테스트 후 사용하세요.
