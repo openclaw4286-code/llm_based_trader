@@ -446,7 +446,9 @@ class OrderExecutor:
             )
 
             order_info["order_id"] = str(order_result.get("id", ""))
-            order_info["status"] = order_result.get("status", "unknown")
+            raw_status = order_result.get("status", "unknown")
+            # Gate.io "finished"(즉시 체결) → "filled"로 정규화
+            order_info["status"] = "filled" if raw_status == "finished" else raw_status
             order_info["entry_price"] = float(order_result.get("fill_price", current_price) or current_price)
 
             logger.info(

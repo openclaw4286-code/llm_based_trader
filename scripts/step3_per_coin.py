@@ -306,7 +306,8 @@ def _process_one_coin(
         if order_result:
             status = order_result.get("status", "unknown")
             logger.info(f"[{symbol}] Order result: {status}")
-            if status == "filled":
+            # Gate.io는 즉시 체결 시 "finished" 반환, "filled"도 호환
+            if status in ("filled", "finished", "closed_on_skip"):
                 return {"filled": True, "pct": result.get("suggested_position_pct", 0)}
     except Exception as e:
         logger.error(f"[{symbol}] Order execution failed: {e}")
