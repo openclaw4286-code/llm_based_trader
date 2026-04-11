@@ -76,78 +76,22 @@ $PYTHON scripts/step2_ict_charts.py 2>&1 | tee -a "$PIPELINE_LOG" || {
     exit 1
 }
 
-# ─── STEP 3: Claude Code용 프롬프트 생성 ─────────────────
-echo "[STEP 3] Generating Claude prompts..." | tee -a "$PIPELINE_LOG"
-$PYTHON scripts/step3_claude_analysis.py --manual 2>&1 | tee -a "$PIPELINE_LOG" || {
-    echo "[STEP 3] FAILED" | tee -a "$PIPELINE_LOG"
-    exit 1
-}
+# ─── STEP 3: Per-Coin 분석 + 즉시 주문 ────────────────────
+# 각 종목에 대해: 프롬프트 생성 → Claude 호출 → 파싱 → 포지션 사이징 → 주문
+# 한 종목씩 순차 처리, 분석 직후 즉시 주문 (대기 없음)
+echo "[STEP 3] Per-coin analysis + order (20 coins sequentially)..." | tee -a "$PIPELINE_LOG"
 
-MASTER_PROMPT="$PROJECT_ROOT/data/analysis/prompts/${SESSION_ID}_master_prompt.txt"
-RESPONSE_FILE="$PROJECT_ROOT/data/analysis/prompts/${SESSION_ID}_response.txt"
-
-if [ ! -f "$MASTER_PROMPT" ]; then
-    echo "[ERROR] Master prompt not found: $MASTER_PROMPT" | tee -a "$PIPELINE_LOG"
-    exit 1
-fi
-
-# ─── STEP 4: Claude Code CLI 호출 ────────────────────────
-echo "[STEP 4] Calling Claude Code (this may take a few minutes)..." | tee -a "$PIPELINE_LOG"
-
-# claude 명령어 경로 확인
+# claude 명령어 경로를 환경변수로 전달
 CLAUDE_PATH=$(command -v claude 2>/dev/null || true)
 if [ -z "$CLAUDE_PATH" ]; then
     echo "[ERROR] 'claude' command not found in PATH=$PATH" | tee -a "$PIPELINE_LOG"
-    echo "[ERROR] HOME=$HOME" | tee -a "$PIPELINE_LOG"
     exit 1
 fi
+export CLAUDE_PATH
 echo "Using claude at: $CLAUDE_PATH" | tee -a "$PIPELINE_LOG"
 
-# Claude CLI 실행 (stderr도 별도 캡처, set +e로 감싸서 에러 시 로깅 가능)
-CLAUDE_ERR="$PROJECT_ROOT/data/analysis/prompts/${SESSION_ID}_claude_error.log"
-set +e
-cat "$MASTER_PROMPT" | "$CLAUDE_PATH" --print --dangerously-skip-permissions --model claude-opus-4-6 --output-format text > "$RESPONSE_FILE" 2>"$CLAUDE_ERR"
-CLAUDE_EXIT=$?
-set -e
-
-if [ $CLAUDE_EXIT -ne 0 ]; then
-    echo "[STEP 4] Claude CLI failed (exit code $CLAUDE_EXIT)" | tee -a "$PIPELINE_LOG"
-    echo "[STEP 4] Error details:" | tee -a "$PIPELINE_LOG"
-    cat "$CLAUDE_ERR" | tee -a "$PIPELINE_LOG"
-    # response 파일에도 에러 내용이 있을 수 있음
-    if [ -s "$RESPONSE_FILE" ]; then
-        echo "[STEP 4] Response file content:" | tee -a "$PIPELINE_LOG"
-        head -20 "$RESPONSE_FILE" | tee -a "$PIPELINE_LOG"
-    fi
-    exit 1
-fi
-
-# 응답 파일이 비어있거나 너무 작으면 실패 처리
-RESPONSE_SIZE=$(wc -c < "$RESPONSE_FILE" | tr -d ' ')
-if [ "$RESPONSE_SIZE" -lt 100 ]; then
-    echo "[STEP 4] Response too small (${RESPONSE_SIZE} bytes), likely auth error" | tee -a "$PIPELINE_LOG"
-    echo "Response content:" | tee -a "$PIPELINE_LOG"
-    cat "$RESPONSE_FILE" | tee -a "$PIPELINE_LOG"
-    if [ -s "$CLAUDE_ERR" ]; then
-        echo "Error log:" | tee -a "$PIPELINE_LOG"
-        cat "$CLAUDE_ERR" | tee -a "$PIPELINE_LOG"
-    fi
-    exit 1
-fi
-
-echo "Response saved to $RESPONSE_FILE (${RESPONSE_SIZE} bytes)" | tee -a "$PIPELINE_LOG"
-
-# ─── STEP 5: 응답 파싱 + 포지션 사이징 ───────────────────
-echo "[STEP 5] Parsing Claude response..." | tee -a "$PIPELINE_LOG"
-$PYTHON scripts/parse_claude_response.py "$RESPONSE_FILE" 2>&1 | tee -a "$PIPELINE_LOG" || {
-    echo "[STEP 5] FAILED" | tee -a "$PIPELINE_LOG"
-    exit 1
-}
-
-# ─── STEP 6: 주문 실행 ───────────────────────────────────
-echo "[STEP 6] Executing orders..." | tee -a "$PIPELINE_LOG"
-$PYTHON scripts/step4_execute_orders.py 2>&1 | tee -a "$PIPELINE_LOG" || {
-    echo "[STEP 6] FAILED" | tee -a "$PIPELINE_LOG"
+$PYTHON scripts/step3_per_coin.py 2>&1 | tee -a "$PIPELINE_LOG" || {
+    echo "[STEP 3] FAILED" | tee -a "$PIPELINE_LOG"
     exit 1
 }
 
