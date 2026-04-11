@@ -35,6 +35,44 @@ from src.logger import setup_logger
 logger = setup_logger("order_executor")
 
 
+def compute_dynamic_leverage(score: int, decision: str) -> int:
+    """
+    점수 절대값 크기에 따라 레버리지를 선형 보간합니다.
+
+    config.yaml의 trading.dynamic_leverage 설정 기반:
+      - long: +10 → 3배, +50 → 10배
+      - short: -20 → 2배, -50 → 5배
+
+    dynamic_leverage.enabled = false 이면 trading.leverage 고정값 사용.
+    """
+    cfg = get_config()
+    trading_cfg = cfg["trading"]
+    dyn = trading_cfg.get("dynamic_leverage", {})
+
+    if not dyn.get("enabled", False):
+        return int(trading_cfg.get("leverage", 5))
+
+    params = dyn.get(decision)  # "long" / "short"
+    if not params:
+        return int(trading_cfg.get("leverage", 5))
+
+    min_s = abs(float(params["min_score"]))
+    max_s = abs(float(params["max_score"]))
+    min_l = float(params["min_leverage"])
+    max_l = float(params["max_leverage"])
+
+    abs_score = abs(float(score))
+    # 범위 클램핑
+    abs_score = max(min_s, min(max_s, abs_score))
+
+    if max_s == min_s:
+        return int(round(min_l))
+
+    ratio = (abs_score - min_s) / (max_s - min_s)
+    leverage = min_l + ratio * (max_l - min_l)
+    return int(round(leverage))
+
+
 def _round_to_tick(price: float, tick_str: str, rounding=ROUND_DOWN) -> Decimal:
     """
     가격을 Gate.io 계약의 tick size(order_price_round) 배수로 반올림합니다.
@@ -238,8 +276,12 @@ class OrderExecutor:
             # 5. 신규 진입 전에도 좀비 미체결 주문 정리
             self._cleanup_pending_orders(symbol, dry_run)
 
-        leverage = self.trading_cfg["leverage"]
-        logger.info(f"[{symbol}] Entering: {decision}, {position_pct:.2f}% of balance, leverage={leverage}x")
+        score = analysis.get("total_score", 0)
+        leverage = compute_dynamic_leverage(score, decision)
+        logger.info(
+            f"[{symbol}] Entering: {decision}, {position_pct:.2f}% of balance, "
+            f"leverage={leverage}x (score={score})"
+        )
 
         # 계약 정보 조회
         contract_info = self._get_contract_info(symbol)

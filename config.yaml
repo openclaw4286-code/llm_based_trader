@@ -8,12 +8,29 @@ trading:
   top_n_coins: 20
   # 롱 진입 기준 점수 (기술적 + 거시적/정량적 합산)
   long_threshold: 10
-  # 숏 진입 기준 점수
-  short_threshold: -10
-  # 레버리지 배수
+  # 숏 진입 기준 점수 (숏은 손실 위험 크므로 보수적으로)
+  short_threshold: -20
+  # 고정 레버리지 (동적 레버리지가 비활성일 때 사용)
   leverage: 5
   # 기본 마진 모드: cross / isolated
   margin_mode: isolated
+  # 동적 레버리지: 점수 절대값에 따라 레버리지 선형 보간
+  dynamic_leverage:
+    enabled: true
+    long:
+      # long_threshold(+10)일 때 → leverage 3
+      # max_score(+50)일 때 → leverage 10
+      min_score: 10
+      max_score: 50
+      min_leverage: 3
+      max_leverage: 10
+    short:
+      # short_threshold(-20)일 때 → leverage 2
+      # -50일 때 → leverage 5
+      min_score: -20
+      max_score: -50
+      min_leverage: 2
+      max_leverage: 5
 
 # --- 포지션 사이징 (Kelly Criterion 기반) ---
 position_sizing:
