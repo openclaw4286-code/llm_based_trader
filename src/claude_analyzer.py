@@ -127,10 +127,20 @@ def _parse_analysis_response(raw_text: str, symbol: str) -> Optional[dict]:
         return None
 
 
+def _safe_int(value, default: int = 0) -> int:
+    """숫자/문자열/None을 안전하게 int로 변환."""
+    if value is None:
+        return default
+    try:
+        return int(float(value))
+    except (ValueError, TypeError):
+        return default
+
+
 def _normalize_result(data: dict, symbol: str) -> dict:
     """분석 결과를 스키마에 맞게 정규화합니다."""
-    tech = int(data.get("technical_score", 0))
-    macro = int(data.get("macro_quant_score", 0))
+    tech = _safe_int(data.get("technical_score"), 0)
+    macro = _safe_int(data.get("macro_quant_score"), 0)
     total = tech + macro
 
     tech = max(-25, min(25, tech))
@@ -148,8 +158,25 @@ def _normalize_result(data: dict, symbol: str) -> dict:
     else:
         decision = "skip"
 
-    confidence = float(data.get("confidence", 0.5))
+    # confidence: 숫자 또는 문자열("low"/"medium"/"high") 허용
+    raw_conf = data.get("confidence", 0.5)
+    if isinstance(raw_conf, str):
+        conf_map = {"low": 0.3, "medium": 0.5, "med": 0.5, "high": 0.75, "very high": 0.9}
+        confidence = conf_map.get(raw_conf.strip().lower(), 0.5)
+    else:
+        try:
+            confidence = float(raw_conf)
+        except (ValueError, TypeError):
+            confidence = 0.5
     confidence = max(0.0, min(1.0, confidence))
+
+    def _safe_float(value, default: float) -> float:
+        if value is None:
+            return default
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return default
 
     return {
         "symbol": symbol,
@@ -161,8 +188,8 @@ def _normalize_result(data: dict, symbol: str) -> dict:
         "decision": decision,
         "confidence": confidence,
         "suggested_position_pct": 0.0,
-        "stop_loss_pct": float(data.get("stop_loss_pct", 3.0)),
-        "take_profit_pct": float(data.get("take_profit_pct", 6.0)),
+        "stop_loss_pct": _safe_float(data.get("stop_loss_pct"), 3.0),
+        "take_profit_pct": _safe_float(data.get("take_profit_pct"), 6.0),
         "analysis_skipped": False,
         "skip_reason": "",
     }

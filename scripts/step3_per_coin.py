@@ -181,96 +181,23 @@ def main():
         logger.info(f"[{coin['rank']}/{len(coins)}] Processing {symbol}")
         logger.info(f"{'='*60}")
 
-        # ICT 요약 로드
-        ict_path = analysis_dir / f"{symbol}_ict.json"
-        if not ict_path.exists():
-            logger.warning(f"[{symbol}] No ICT data, skipping")
-            continue
-        with open(ict_path, "r", encoding="utf-8") as f:
-            ict_summary = json.load(f)
-
-        # 뉴스
-        news_items = news_by_symbol.get(symbol, [])
-        news_text = format_news_for_prompt(news_items)
-
-        # 차트 경로
-        chart_abs = str((Path(cfg["paths"]["charts"]) / f"{symbol}.png").resolve())
-
-        # 프롬프트 생성
-        prompt = generate_prompt_for_claude_code(
-            symbol=symbol,
-            ict_summary=ict_summary,
-            coin_info=coin,
-            current_price=coin.get("last_price", 0),
-            rank=coin.get("rank", 99),
-            news_text=news_text,
-            chart_path=chart_abs,
-        )
-
-        # 프롬프트 저장 (디버그용)
-        prompt_file = prompts_dir / f"{session_id}_{symbol}_prompt.txt"
-        prompt_file.write_text(prompt, encoding="utf-8")
-
-        # Claude 호출
-        logger.info(f"[{symbol}] Calling Claude Code...")
-        start = time.time()
-        raw_response = call_claude_for_coin(prompt, claude_path)
-        elapsed = time.time() - start
-        logger.info(f"[{symbol}] Claude responded in {elapsed:.1f}s ({len(raw_response)} bytes)")
-
-        # 응답 저장 (디버그용)
-        response_file = prompts_dir / f"{session_id}_{symbol}_response.txt"
-        response_file.write_text(raw_response, encoding="utf-8")
-
-        if not raw_response or len(raw_response) < 50:
-            logger.error(f"[{symbol}] Empty/tiny response, skipping")
-            continue
-
-        # 응답 파싱
-        result = parse_and_save_response(symbol, raw_response)
-        if result is None:
-            logger.error(f"[{symbol}] Parse failed, skipping")
-            continue
-
-        total_processed += 1
-        decision = result.get("decision", "skip")
-        score = result.get("total_score", 0)
-        logger.info(f"[{symbol}] Decision: {decision}, score: {score}")
-
-        # 포지션 사이징 (skip이 아니면)
-        if decision in ("long", "short"):
-            pct = compute_position_pct(result, running_exposure, max_exposure)
-            result["suggested_position_pct"] = pct
-            save_analysis_json(symbol, result)
-
-            if pct <= 0:
-                logger.warning(f"[{symbol}] Position pct = 0 (exposure cap), skipping order")
-                continue
-
-            logger.info(f"[{symbol}] Position: {pct:.2f}% (running exposure: {running_exposure:.1f}%)")
-
-        # 주문 실행 (단일 종목)
-        analysis_data = result
-        existing = existing_positions.get(symbol)
-
         try:
-            order_result = executor._process_single_coin(
-                symbol=symbol,
-                analysis=analysis_data,
-                existing=existing,
-                balance=balance,
-                dry_run=False,
+            out = _process_one_coin(
+                coin=coin, symbol=symbol,
+                analysis_dir=analysis_dir, prompts_dir=prompts_dir,
+                session_id=session_id, news_by_symbol=news_by_symbol,
+                cfg=cfg, claude_path=claude_path, executor=executor,
+                existing_positions=existing_positions, balance=balance,
+                running_exposure=running_exposure, max_exposure=max_exposure,
             )
-            if order_result:
-                status = order_result.get("status", "unknown")
-                logger.info(f"[{symbol}] Order result: {status}")
-                if status == "filled":
+            if out:
+                total_processed += 1
+                if out.get("filled"):
                     total_orders += 1
-                    # 실제 진입 시 running_exposure 증가
-                    if decision in ("long", "short"):
-                        running_exposure += result.get("suggested_position_pct", 0)
+                    running_exposure += out.get("pct", 0)
         except Exception as e:
-            logger.error(f"[{symbol}] Order execution failed: {e}")
+            logger.error(f"[{symbol}] UNEXPECTED ERROR (continuing): {e}", exc_info=True)
+            continue
 
     # 세션 마킹
     mark_session_processed(session_id)
@@ -279,6 +206,102 @@ def main():
     logger.info(f"COMPLETE: {total_processed} analyzed, {total_orders} new orders placed")
     logger.info(f"Final exposure: {running_exposure:.1f}%")
     logger.info(f"{'='*60}")
+
+
+def _process_one_coin(
+    coin, symbol, analysis_dir, prompts_dir, session_id,
+    news_by_symbol, cfg, claude_path, executor,
+    existing_positions, balance, running_exposure, max_exposure,
+):
+    """단일 종목 처리. 반환: {'filled': bool, 'pct': float} 또는 None."""
+    # ICT 요약 로드
+    ict_path = analysis_dir / f"{symbol}_ict.json"
+    if not ict_path.exists():
+        logger.warning(f"[{symbol}] No ICT data, skipping")
+        return None
+
+    with open(ict_path, "r", encoding="utf-8") as f:
+        ict_summary = json.load(f)
+
+    # 뉴스
+    news_items = news_by_symbol.get(symbol, [])
+    news_text = format_news_for_prompt(news_items)
+
+    # 차트 경로
+    chart_abs = str((Path(cfg["paths"]["charts"]) / f"{symbol}.png").resolve())
+
+    # 프롬프트 생성
+    prompt = generate_prompt_for_claude_code(
+        symbol=symbol,
+        ict_summary=ict_summary,
+        coin_info=coin,
+        current_price=coin.get("last_price", 0),
+        rank=coin.get("rank", 99),
+        news_text=news_text,
+        chart_path=chart_abs,
+    )
+
+    # 프롬프트 저장 (디버그용)
+    prompt_file = prompts_dir / f"{session_id}_{symbol}_prompt.txt"
+    prompt_file.write_text(prompt, encoding="utf-8")
+
+    # Claude 호출
+    logger.info(f"[{symbol}] Calling Claude Code...")
+    start = time.time()
+    raw_response = call_claude_for_coin(prompt, claude_path)
+    elapsed = time.time() - start
+    logger.info(f"[{symbol}] Claude responded in {elapsed:.1f}s ({len(raw_response)} bytes)")
+
+    # 응답 저장 (디버그용)
+    response_file = prompts_dir / f"{session_id}_{symbol}_response.txt"
+    response_file.write_text(raw_response, encoding="utf-8")
+
+    if not raw_response or len(raw_response) < 50:
+        logger.error(f"[{symbol}] Empty/tiny response, skipping")
+        return None
+
+    # 응답 파싱
+    result = parse_and_save_response(symbol, raw_response)
+    if result is None:
+        logger.error(f"[{symbol}] Parse failed, skipping")
+        return None
+
+    decision = result.get("decision", "skip")
+    score = result.get("total_score", 0)
+    logger.info(f"[{symbol}] Decision: {decision}, score: {score}")
+
+    # 포지션 사이징 (skip이 아니면)
+    if decision in ("long", "short"):
+        pct = compute_position_pct(result, running_exposure, max_exposure)
+        result["suggested_position_pct"] = pct
+        save_analysis_json(symbol, result)
+
+        if pct <= 0:
+            logger.warning(f"[{symbol}] Position pct = 0 (exposure cap), skipping order")
+            return {"filled": False, "pct": 0}
+
+        logger.info(f"[{symbol}] Position: {pct:.2f}% (running exposure: {running_exposure:.1f}%)")
+
+    # 주문 실행 (단일 종목)
+    existing = existing_positions.get(symbol)
+
+    try:
+        order_result = executor._process_single_coin(
+            symbol=symbol,
+            analysis=result,
+            existing=existing,
+            balance=balance,
+            dry_run=False,
+        )
+        if order_result:
+            status = order_result.get("status", "unknown")
+            logger.info(f"[{symbol}] Order result: {status}")
+            if status == "filled":
+                return {"filled": True, "pct": result.get("suggested_position_pct", 0)}
+    except Exception as e:
+        logger.error(f"[{symbol}] Order execution failed: {e}")
+
+    return {"filled": False, "pct": 0}
 
 
 if __name__ == "__main__":
