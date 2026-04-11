@@ -45,7 +45,7 @@ mkdir -p "$LOG_DIR"
 
 SESSION_ID=$(python3 -c "
 from datetime import datetime, timedelta
-SCHEDULE=[4,10,16,22]
+SCHEDULE=[4,9,13,16,21]
 now=datetime.now()
 h=now.hour
 cand=[x for x in SCHEDULE if x<=h]

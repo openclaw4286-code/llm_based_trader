@@ -43,10 +43,10 @@ logger = setup_logger("step3")
 
 
 def get_prev_session_id() -> str:
-    """이전 세션 ID를 계산합니다 (6시간 전)."""
+    """이전 세션 ID를 계산합니다 (세션 간격 기준)."""
     from src.file_manager import SCHEDULE_HOURS
     now = datetime.now()
-    prev = now - timedelta(hours=6)
+    prev = now - timedelta(hours=4)
     hour = prev.hour
     candidates = [h for h in SCHEDULE_HOURS if h <= hour]
     if candidates:

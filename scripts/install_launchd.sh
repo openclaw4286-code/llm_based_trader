@@ -54,10 +54,11 @@ cat > "$PLIST" <<PLISTEOF
 
     <key>StartCalendarInterval</key>
     <array>
-        <dict><key>Hour</key><integer>4</integer><key>Minute</key><integer>0</integer></dict>
-        <dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>0</integer></dict>
-        <dict><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
-        <dict><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>4</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Hour</key><integer>13</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Hour</key><integer>21</integer><key>Minute</key><integer>30</integer></dict>
     </array>
 
     <key>EnvironmentVariables</key>
@@ -85,7 +86,7 @@ launchctl bootstrap "gui/$(id -u)" "$PLIST"
 
 echo "LaunchAgent installed:"
 echo "  Plist: $PLIST"
-echo "  Schedule: 04:00, 10:00, 16:00, 22:00"
+echo "  Schedule: 04:30, 09:30, 13:30, 16:30, 21:30 (every day incl. weekends)"
 echo "  Stdout: $PROJECT_ROOT/logs/launchd_stdout.log"
 echo "  Stderr: $PROJECT_ROOT/logs/launchd_stderr.log"
 echo ""
