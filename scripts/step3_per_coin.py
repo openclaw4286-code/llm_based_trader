@@ -143,8 +143,9 @@ def main():
     news_by_symbol = fetch_news_for_symbols(symbols, hours=24)
 
     # 경제 캘린더 수집 (한 번만, 모든 종목 공통)
-    logger.info("Fetching economic calendar (high-impact events, next 72h)...")
-    econ_events = fetch_economic_events(hours_ahead=72, high_impact_only=True)
+    # 지난 24시간 내 나온 결과 + 향후 72시간 내 예정 이벤트 (high impact만)
+    logger.info("Fetching economic calendar (high-impact, past 24h + next 72h)...")
+    econ_events = fetch_economic_events(hours_ahead=72, hours_behind=24, high_impact_only=True)
     econ_text = format_events_for_prompt(econ_events)
     logger.info(f"Economic events in window: {len(econ_events)}")
 
