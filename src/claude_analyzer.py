@@ -25,10 +25,11 @@ def generate_prompt_for_claude_code(
     rank: int,
     news_text: str = "",
     chart_path: str = "",
+    econ_text: str = "",
 ) -> str:
     """Claude Code용 프롬프트를 생성합니다."""
     return build_full_analysis_prompt(
-        symbol, ict_summary, coin_info, current_price, news_text, chart_path
+        symbol, ict_summary, coin_info, current_price, news_text, chart_path, econ_text
     )
 
 

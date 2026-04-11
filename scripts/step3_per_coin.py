@@ -34,6 +34,7 @@ from src.file_manager import (
 )
 from src.claude_analyzer import generate_prompt_for_claude_code, parse_and_save_response, _normalize_result
 from src.news_fetcher import fetch_news_for_symbols, format_news_for_prompt
+from src.economic_calendar import fetch_economic_events, format_events_for_prompt
 from src.gateio_client import GateIOClient
 from src.order_executor import OrderExecutor
 from src.position_sizing import kelly_criterion
@@ -141,6 +142,12 @@ def main():
     symbols = [c["symbol"] for c in coins]
     news_by_symbol = fetch_news_for_symbols(symbols, hours=24)
 
+    # 경제 캘린더 수집 (한 번만, 모든 종목 공통)
+    logger.info("Fetching economic calendar (high-impact events, next 72h)...")
+    econ_events = fetch_economic_events(hours_ahead=72, high_impact_only=True)
+    econ_text = format_events_for_prompt(econ_events)
+    logger.info(f"Economic events in window: {len(econ_events)}")
+
     # Gate.io 클라이언트 + executor
     client = GateIOClient()
     executor = OrderExecutor()
@@ -186,6 +193,7 @@ def main():
                 coin=coin, symbol=symbol,
                 analysis_dir=analysis_dir, prompts_dir=prompts_dir,
                 session_id=session_id, news_by_symbol=news_by_symbol,
+                econ_text=econ_text,
                 cfg=cfg, claude_path=claude_path, executor=executor,
                 existing_positions=existing_positions, balance=balance,
                 running_exposure=running_exposure, max_exposure=max_exposure,
@@ -210,7 +218,7 @@ def main():
 
 def _process_one_coin(
     coin, symbol, analysis_dir, prompts_dir, session_id,
-    news_by_symbol, cfg, claude_path, executor,
+    news_by_symbol, econ_text, cfg, claude_path, executor,
     existing_positions, balance, running_exposure, max_exposure,
 ):
     """단일 종목 처리. 반환: {'filled': bool, 'pct': float} 또는 None."""
@@ -239,6 +247,7 @@ def _process_one_coin(
         rank=coin.get("rank", 99),
         news_text=news_text,
         chart_path=chart_abs,
+        econ_text=econ_text,
     )
 
     # 프롬프트 저장 (디버그용)

@@ -37,6 +37,7 @@ def build_full_analysis_prompt(
     current_price: float,
     news_text: str = "",
     chart_path: str = "",
+    econ_text: str = "",
 ) -> str:
     """풀 분석 프롬프트를 생성합니다."""
     ict_data = _format_ict_summary(ict_summary)
@@ -45,6 +46,15 @@ def build_full_analysis_prompt(
     news_section = ""
     if news_text and news_text != "(no recent news found)":
         news_section = f"\n== RECENT NEWS (last 24h, from RSS feeds) ==\n{news_text}\n"
+
+    econ_section = ""
+    if econ_text and econ_text != "(no high-impact economic events in the window)":
+        econ_section = (
+            f"\n== UPCOMING ECONOMIC CALENDAR (next 72h, high-impact only) ==\n"
+            f"{econ_text}\n"
+            f"(These are global macro events that can cause volatility "
+            f"in crypto/risk assets. Consider proximity to these events.)\n"
+        )
 
     chart_section = ""
     if chart_path:
@@ -63,7 +73,7 @@ def build_full_analysis_prompt(
 {chart_section}
 == ICT TECHNICAL ANALYSIS (Daily Chart — numerical summary) ==
 {ict_data}
-{news_section}
+{news_section}{econ_section}
 == YOUR TASK ==
 1. TECHNICAL ANALYSIS (-25 to +25):
    - FIRST: Read the chart image file (if provided above) and visually assess the structure
@@ -77,6 +87,10 @@ def build_full_analysis_prompt(
 
 2. MACRO/QUANTITATIVE ANALYSIS (-25 to +25):
    - PRIORITIZE the RECENT NEWS section above if present (freshest signal)
+   - CONSIDER UPCOMING ECONOMIC CALENDAR events (FOMC, CPI, NFP, etc.):
+     * If a high-impact event is within 6 hours, REDUCE conviction (expect volatility)
+     * Dollar-strengthening events (hawkish Fed) are bearish for crypto
+     * Dollar-weakening events (dovish Fed, bad CPI) are bullish for crypto
    - Assess news sentiment and market narrative
    - Evaluate tokenomics and supply dynamics
    - Consider broader crypto market conditions (BTC dominance, total market cap trend)
