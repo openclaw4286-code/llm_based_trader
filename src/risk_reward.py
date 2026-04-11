@@ -23,59 +23,75 @@ def calculate_sl(
 
     롱: 현재가 아래 가장 가까운 Bullish OB 하단 또는 Swing Low
     숏: 현재가 위 가장 가까운 Bearish OB 상단 또는 Swing High
+
+    고빈도 모드:
+      - max_level_distance_pct 이내의 레벨만 사용 (먼 레벨 무시)
+      - max_sl_pct 초과 시 강제 클램핑
     """
     cfg = get_config()
     rr_cfg = cfg.get("risk_reward", {})
-    buffer_pct = rr_cfg.get("sl_buffer_pct", 0.2) / 100.0
-    fallback_pct = rr_cfg.get("sl_fallback_pct", 3.0) / 100.0
+    buffer_pct = rr_cfg.get("sl_buffer_pct", 0.1) / 100.0
+    fallback_pct = rr_cfg.get("sl_fallback_pct", 1.5) / 100.0
+    max_level_dist = rr_cfg.get("max_level_distance_pct", 3.5) / 100.0
+    max_sl_pct = rr_cfg.get("max_sl_pct", 2.0) / 100.0
 
     obs = ict_summary.get("active_order_blocks", [])
     pd_info = ict_summary.get("premium_discount", {})
 
+    # 레벨 후보 수집 (현재가에서 max_level_dist 이내만)
+    max_dist_price = current_price * max_level_dist
+
     if decision == "long":
-        # 현재가 아래의 Bullish OB 하단 찾기
         candidates = []
         for ob in obs:
             if ob["type"] == "bullish" and ob["bottom"] < current_price:
-                candidates.append(ob["bottom"])
+                # 너무 먼 레벨 제외
+                if current_price - ob["bottom"] <= max_dist_price:
+                    candidates.append(ob["bottom"])
 
-        # Swing Low도 후보에 추가
         swing_low = pd_info.get("swing_low", 0)
-        if 0 < swing_low < current_price:
+        if 0 < swing_low < current_price and (current_price - swing_low) <= max_dist_price:
             candidates.append(swing_low)
 
         if candidates:
-            # 현재가에 가장 가까운 (가장 높은) 지지 레벨
             nearest = max(candidates)
             sl = nearest * (1 - buffer_pct)
             logger.info(f"SL (long): nearest support={nearest:.6f}, with buffer={sl:.6f}")
-            return sl
+        else:
+            sl = current_price * (1 - fallback_pct)
+            logger.info(f"SL (long): no nearby OB/Swing, fallback {fallback_pct*100}% → {sl:.6f}")
 
-        # 폴백: 현재가의 fallback_pct%
-        sl = current_price * (1 - fallback_pct)
-        logger.info(f"SL (long): no OB/Swing found, fallback {fallback_pct*100}% → {sl:.6f}")
+        # max_sl_pct 클램핑: SL이 너무 멀면 잘라냄
+        min_sl_price = current_price * (1 - max_sl_pct)
+        if sl < min_sl_price:
+            logger.info(f"SL (long) clamped: {sl:.6f} → {min_sl_price:.6f} (max {max_sl_pct*100}%)")
+            sl = min_sl_price
         return sl
 
     else:  # short
-        # 현재가 위의 Bearish OB 상단 찾기
         candidates = []
         for ob in obs:
             if ob["type"] == "bearish" and ob["top"] > current_price:
-                candidates.append(ob["top"])
+                if ob["top"] - current_price <= max_dist_price:
+                    candidates.append(ob["top"])
 
-        # Swing High도 후보
         swing_high = pd_info.get("swing_high", 0)
-        if swing_high > current_price:
+        if swing_high > current_price and (swing_high - current_price) <= max_dist_price:
             candidates.append(swing_high)
 
         if candidates:
             nearest = min(candidates)
             sl = nearest * (1 + buffer_pct)
             logger.info(f"SL (short): nearest resistance={nearest:.6f}, with buffer={sl:.6f}")
-            return sl
+        else:
+            sl = current_price * (1 + fallback_pct)
+            logger.info(f"SL (short): no nearby OB/Swing, fallback {fallback_pct*100}% → {sl:.6f}")
 
-        sl = current_price * (1 + fallback_pct)
-        logger.info(f"SL (short): no OB/Swing found, fallback {fallback_pct*100}% → {sl:.6f}")
+        # max_sl_pct 클램핑
+        max_sl_price = current_price * (1 + max_sl_pct)
+        if sl > max_sl_price:
+            logger.info(f"SL (short) clamped: {sl:.6f} → {max_sl_price:.6f} (max {max_sl_pct*100}%)")
+            sl = max_sl_price
         return sl
 
 
@@ -101,14 +117,16 @@ def calculate_tp_targets(
         {"pct": 30, "target": "fvg"},
         {"pct": 20, "target": "opposite_ob"},
     ])
-    min_rr = rr_cfg.get("min_rr_ratio", 3.0)
+    min_rr = rr_cfg.get("min_rr_ratio", 2.5)
+    max_tp_pct = rr_cfg.get("max_tp_pct", 6.0) / 100.0
+    max_level_dist = rr_cfg.get("max_level_distance_pct", 3.5) / 100.0
 
-    # SL 거리 기반 폴백 계산 (최소 R:R 보장)
-    # TP1 = SL 거리 × min_rr, TP2 = × (min_rr + 0.5), TP3 = × (min_rr + 1.0)
     if sl_price > 0:
         sl_distance = abs(current_price - sl_price)
     else:
-        sl_distance = current_price * 0.03  # 안전 폴백
+        sl_distance = current_price * 0.015  # 안전 폴백
+
+    max_dist_price = current_price * max_level_dist
 
     liqs = ict_summary.get("unswept_liquidity", [])
     fvgs = ict_summary.get("active_fvgs", [])
@@ -117,17 +135,19 @@ def calculate_tp_targets(
     targets = []
 
     if decision == "long":
-        # 1차: Buy-side Liquidity (현재가 위의 가장 가까운)
-        liq_prices = [l["price"] for l in liqs if l["type"] == "buy_side" and l["price"] > current_price]
-        liq_prices.sort()
-
-        # 2차: 미충전 Bearish FVG (현재가 위)
-        fvg_prices = [f["bottom"] for f in fvgs if f["type"] == "bearish" and f["bottom"] > current_price]
-        fvg_prices.sort()
-
-        # 3차: Bearish OB (현재가 위)
-        ob_prices = [ob["bottom"] for ob in obs if ob["type"] == "bearish" and ob["bottom"] > current_price]
-        ob_prices.sort()
+        # 각 타입별 레벨 후보 (현재가 위 + max_level_dist 이내만)
+        liq_prices = sorted([
+            l["price"] for l in liqs
+            if l["type"] == "buy_side" and current_price < l["price"] <= current_price + max_dist_price
+        ])
+        fvg_prices = sorted([
+            f["bottom"] for f in fvgs
+            if f["type"] == "bearish" and current_price < f["bottom"] <= current_price + max_dist_price
+        ])
+        ob_prices = sorted([
+            ob["bottom"] for ob in obs
+            if ob["type"] == "bearish" and current_price < ob["bottom"] <= current_price + max_dist_price
+        ])
 
         price_pools = {
             "liquidity": liq_prices,
@@ -135,8 +155,7 @@ def calculate_tp_targets(
             "opposite_ob": ob_prices,
         }
 
-        # 폴백 배수: TP1 = min_rr, TP2 = min_rr+0.5, TP3 = min_rr+1.0
-        fallback_multipliers = [min_rr, min_rr + 0.5, min_rr + 1.0]
+        fallback_multipliers = [min_rr, min_rr + 0.3, min_rr + 0.6]
 
         for i, tp_spec in enumerate(tp_config):
             target_type = tp_spec["target"]
@@ -144,22 +163,33 @@ def calculate_tp_targets(
             pool = price_pools.get(target_type, [])
 
             if pool:
-                price = pool.pop(0)  # 가장 가까운 것 사용
+                price = pool.pop(0)
                 targets.append({"price": price, "pct_of_position": pct, "reason": target_type})
             else:
                 mult = fallback_multipliers[min(i, len(fallback_multipliers) - 1)]
                 extended = current_price + (sl_distance * mult)
                 targets.append({"price": extended, "pct_of_position": pct, "reason": f"{target_type}_fallback_{mult}x"})
 
+        # max_tp_pct 클램핑 (1차 TP 기준)
+        max_tp_price = current_price * (1 + max_tp_pct)
+        for t in targets:
+            if t["price"] > max_tp_price:
+                logger.info(f"TP (long) clamped: {t['price']:.6f} → {max_tp_price:.6f} (max {max_tp_pct*100}%)")
+                t["price"] = max_tp_price
+
     else:  # short
-        liq_prices = [l["price"] for l in liqs if l["type"] == "sell_side" and l["price"] < current_price]
-        liq_prices.sort(reverse=True)
-
-        fvg_prices = [f["top"] for f in fvgs if f["type"] == "bullish" and f["top"] < current_price]
-        fvg_prices.sort(reverse=True)
-
-        ob_prices = [ob["top"] for ob in obs if ob["type"] == "bullish" and ob["top"] < current_price]
-        ob_prices.sort(reverse=True)
+        liq_prices = sorted([
+            l["price"] for l in liqs
+            if l["type"] == "sell_side" and current_price - max_dist_price <= l["price"] < current_price
+        ], reverse=True)
+        fvg_prices = sorted([
+            f["top"] for f in fvgs
+            if f["type"] == "bullish" and current_price - max_dist_price <= f["top"] < current_price
+        ], reverse=True)
+        ob_prices = sorted([
+            ob["top"] for ob in obs
+            if ob["type"] == "bullish" and current_price - max_dist_price <= ob["top"] < current_price
+        ], reverse=True)
 
         price_pools = {
             "liquidity": liq_prices,
@@ -167,7 +197,7 @@ def calculate_tp_targets(
             "opposite_ob": ob_prices,
         }
 
-        fallback_multipliers = [min_rr, min_rr + 0.5, min_rr + 1.0]
+        fallback_multipliers = [min_rr, min_rr + 0.3, min_rr + 0.6]
 
         for i, tp_spec in enumerate(tp_config):
             target_type = tp_spec["target"]
@@ -181,6 +211,13 @@ def calculate_tp_targets(
                 mult = fallback_multipliers[min(i, len(fallback_multipliers) - 1)]
                 extended = current_price - (sl_distance * mult)
                 targets.append({"price": extended, "pct_of_position": pct, "reason": f"{target_type}_fallback_{mult}x"})
+
+        # max_tp_pct 클램핑 (숏)
+        min_tp_price = current_price * (1 - max_tp_pct)
+        for t in targets:
+            if t["price"] < min_tp_price:
+                logger.info(f"TP (short) clamped: {t['price']:.6f} → {min_tp_price:.6f} (max {max_tp_pct*100}%)")
+                t["price"] = min_tp_price
 
     for t in targets:
         logger.info(f"TP target ({decision}): ${t['price']:.6f} ({t['pct_of_position']}%, {t['reason']})")

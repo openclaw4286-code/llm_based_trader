@@ -54,16 +54,23 @@ scoring:
   macro_quant_min: -25
   macro_quant_max: 25
 
-# --- ICT 기반 Risk & Reward ---
+# --- ICT 기반 Risk & Reward (고빈도 트레이딩용 타이트 설정) ---
 risk_reward:
   # 최소 R:R 비율 (1차 TP 기준, 미달 시 진입 거부)
-  min_rr_ratio: 3.0
+  min_rr_ratio: 2.5
   # SL 여유 (OB/Swing 레벨에서 추가로 떨어뜨리는 %)
-  sl_buffer_pct: 0.2
+  sl_buffer_pct: 0.1
+  # ICT 레벨이 현재가에서 이 거리 초과면 무시하고 폴백 사용
+  # (고빈도 목적으로 먼 레벨은 사용 안 함)
+  max_level_distance_pct: 3.5
+  # SL 최대 거리 % (이보다 멀면 강제 클램핑)
+  max_sl_pct: 2.0
+  # 1차 TP 최대 거리 % (이보다 멀면 강제 클램핑)
+  max_tp_pct: 6.0
   # OB/Swing 레벨을 찾지 못했을 때 폴백 SL% (현재가 대비)
-  sl_fallback_pct: 3.0
+  sl_fallback_pct: 1.5
   # TP 레벨을 찾지 못했을 때 폴백 TP% (현재가 대비)
-  tp_fallback_pct: 6.0
+  tp_fallback_pct: 4.0
   # 멀티 TP 타겟 (분할 청산)
   tp_targets:
     - pct: 50       # 포지션의 50%를 1차 TP에서 청산
